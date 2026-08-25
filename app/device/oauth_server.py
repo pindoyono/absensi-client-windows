@@ -281,8 +281,8 @@ def simpan_config_device(
     jwt_token: str = "",
 ):
     """Simpan konfigurasi device ke .env dan device_config.json."""
-    from app.device.setup import simpan_config_lokal, update_env_file
-    simpan_config_lokal(api_key, device_id, jwt_token)
+    from app.device.setup import simpan_config_lokal, update_env_file, load_config_lokal
+    simpan_config_lokal(api_key, device_id, jwt_token, role=role, nama=nama)
     update_env_file(api_key)
     
     # Update tambahan info ke config
@@ -318,6 +318,8 @@ def proses_oauth_token(
     Kirim id_token ke server → register device → simpan config.
     Dipanggil dari UI atau dari OAuth callback.
     """
+    from app.device.setup import load_config_lokal
+
     result = LoginResult()
 
     # 1. Login ke server
@@ -354,16 +356,24 @@ def proses_oauth_token(
             },
             timeout=15,
         )
-        if resp_reg.status_code != 200:
+        if resp_reg.status_code == 409:
+            # Device sudah terdaftar — pakai API key lokal yang tersimpan
+            config = load_config_lokal()
+            api_key = config.get("api_key", "")
+            if not api_key:
+                result.error = "Device sudah terdaftar tapi API key tidak ditemukan di lokal"
+                return result
+            result.api_key = api_key
+        elif resp_reg.status_code != 200:
             result.error = f"Registrasi device gagal ({resp_reg.status_code}): {resp_reg.text}"
             return result
+        else:
+            reg_data = resp_reg.json()
+            api_key = reg_data.get("api_key", reg_data.get("device_api_key", ""))
+            result.api_key = api_key
     except Exception as e:
         result.error = f"Registrasi device gagal: {e}"
         return result
-
-    reg_data = resp_reg.json()
-    api_key = reg_data.get("api_key", reg_data.get("device_api_key", ""))
-    result.api_key = api_key
 
     # 3. Simpan config lokal
     simpan_config_device(

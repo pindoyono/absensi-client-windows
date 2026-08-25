@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 
 from app.business.attendance_logic import proses_absen, HasilAbsen
 from app.database.repository import AbsensiRepository
+from app.device.setup import load_config_lokal, save_config_lokal
 from app.face.engine_base import FaceEngine
 from app.face.matcher import cari_siswa_cocok
 from app.ui.styles import WARNA, STYLESHEET_DASAR
@@ -45,6 +46,12 @@ class KioskWindow(QWidget):
         self._menampilkan_hasil = False
         self._cap: cv2.VideoCapture | None = None
 
+        # State login admin
+        self._admin_logged_in = False
+        self._admin_nama = ""
+        self._admin_role = ""
+        self._admin_window: "QMainWindow | None" = None
+
         self.setWindowTitle("Absensi SMK — Kiosk")
         self.setStyleSheet(STYLESHEET_DASAR)
         self._bangun_ui()
@@ -54,15 +61,27 @@ class KioskWindow(QWidget):
         self._timer_reset.timeout.connect(self._kembali_ke_idle)
 
         if gunakan_kamera:
-            self._cap = cv2.VideoCapture(0)
-            self._timer_kamera = QTimer(self)
-            self._timer_kamera.timeout.connect(self._tick_kamera)
-            self._timer_kamera.start(INTERVAL_KAMERA_MS)
+            # Windows: pakai DSHOW backend untuk hindari error MSMF
+            self._cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+            if not self._cap.isOpened():
+                # Fallback ke default backend
+                self._cap = cv2.VideoCapture(0)
+            if not self._cap.isOpened():
+                self._cap = None
+                self.label_hasil.setText("❌ Kamera tidak tersedia")
+                self.label_hasil.setStyleSheet(f"font-size: 15px; color: {WARNA['bahaya_teks']};")
+            else:
+                self._timer_kamera = QTimer(self)
+                self._timer_kamera.timeout.connect(self._tick_kamera)
+                self._timer_kamera.start(INTERVAL_KAMERA_MS)
 
         self._timer_jam = QTimer(self)
         self._timer_jam.timeout.connect(self._update_jam)
         self._timer_jam.start(1000)
         self._update_jam()
+
+        # Update login state saat inisialisasi
+        self._update_login_state()
 
     # ---------- UI ----------
 
@@ -81,7 +100,7 @@ class KioskWindow(QWidget):
         kartu_layout.setContentsMargins(0, 0, 0, 0)
         kartu_layout.setSpacing(0)
 
-        # Header: status jaringan + tombol admin + jam
+        # Header: status jaringan + tombol admin/login + jam
         header = QHBoxLayout()
         header.setContentsMargins(16, 12, 16, 12)
         header.setSpacing(10)
@@ -93,8 +112,15 @@ class KioskWindow(QWidget):
         self.label_jam.setObjectName("jamTampilan")
         self.label_jam.setStyleSheet(f"color: {WARNA['teks_utama']}; font-size: 13px; font-weight: 600;")
 
-        # Tombol Login / Admin yang jelas terlihat di header
-        self.btn_admin = QPushButton("⚙ Admin / Login")
+        # Container untuk login/logout tombol + username label
+        self.header_right = QHBoxLayout()
+        self.header_right.setSpacing(8)
+
+        self.lbl_user = QLabel("")
+        self.lbl_user.setStyleSheet(f"color: {WARNA['teks_sekunder']}; font-size: 12px;")
+        self.lbl_user.setVisible(False)
+
+        self.btn_admin = QPushButton("🔐 Login Admin")
         self.btn_admin.setCursor(Qt.PointingHandCursor)
         self.btn_admin.setMinimumHeight(32)
         self.btn_admin.setStyleSheet(
@@ -102,11 +128,14 @@ class KioskWindow(QWidget):
             f"border: 1px solid {WARNA['border']}; border-radius: 6px; padding: 4px 12px; font-size: 12px; font-weight: 600; }}"
             f"QPushButton:hover {{ background-color: {WARNA['border']}; }}"
         )
-        self.btn_admin.clicked.connect(self._buka_admin)
+        self.btn_admin.clicked.connect(self._on_btn_admin_clicked)
+
+        self.header_right.addWidget(self.lbl_user)
+        self.header_right.addWidget(self.btn_admin)
 
         header.addWidget(self.label_status_jaringan)
         header.addStretch()
-        header.addWidget(self.btn_admin)
+        header.addLayout(self.header_right)
         header.addWidget(self.label_jam)
         kartu_layout.addLayout(header)
 
@@ -278,21 +307,83 @@ class KioskWindow(QWidget):
         self.kartu_status.setVisible(False)
 
     def _buka_admin(self, event=None):
-        """Buka jendela Admin/Guru Piket untuk enrollment, jadwal, dll."""
+        """Buka jendela Admin/Guru Piket untuk login, enrollment, jadwal, dll."""
         from app.ui.admin_window import AdminWindow
-        if not hasattr(self, '_admin_window') or self._admin_window is None or not self._admin_window.isVisible():
-            self._admin_window = AdminWindow(
-                engine=self.engine,
-                repo=self.repo,
-                server_url="https://absen.smkn2malinau.sch.id", # Bisa diganti dari settings
-                face_encryption_key=self.face_encryption_key,
-                device_id=self.device_id,
-            )
-            self._admin_window.show()
-            self._admin_window.activateWindow()
+
+        # Tutup jika masih terbuka
+        if self._admin_window:
+            self._admin_window.close()
+
+        self._admin_window = AdminWindow(
+            engine=self.engine,
+            repo=self.repo,
+            server_url="https://absen.smkn2malinau.sch.id",
+            face_encryption_key=self.face_encryption_key,
+            device_id=self.device_id,
+        )
+        self._admin_window.logout_admin.connect(self._on_admin_logout)
+        self._admin_window.login_sukses_signal.connect(self._update_login_state)
+        self._admin_window.show()
+        self._admin_window.activateWindow()
+
+    def _on_admin_logout(self):
+        """Handle logout dari admin window."""
+        self._admin_logged_in = False
+        self._admin_role = ""
+        self._admin_nama = ""
+        self.btn_admin.setText("🔐 Login Admin")
+        self.lbl_user.setText("")
+        self.lbl_user.setVisible(False)
+        self._update_login_state()
+
+    def _on_btn_admin_clicked(self):
+        # Jika sudah login, tombol ini berfungsi sebagai Logout
+        if self._admin_logged_in:
+            from app.ui.admin_window import AdminWindow
+            # Kita bisa panggil _proses_logout dari AdminWindow secara dummy atau langsung hapus config
+            config = load_config_lokal()
+            config.pop("role", None)
+            config.pop("admin_nama", None)
+            config.pop("jwt_token", None) # Hapus token juga agar benar-benar logout
+            save_config_lokal(config)
+            self._on_admin_logout()
+            return
+
+        # Jika belum login, buka admin window untuk login
+        self._buka_admin()
+
+    def _update_login_state(self):
+        """Update tombol login/logout + username label berdasarkan config."""
+        config = load_config_lokal()
+        jwt_token = config.get("jwt_token", "")
+        sudah_login = bool(jwt_token) and self._cek_jwt_valid(jwt_token)
+
+        if sudah_login:
+            nama = config.get("admin_nama", "User")
+            role = config.get("role", "")
+            self._admin_logged_in = True
+            self._admin_nama = nama
+            self._admin_role = role
+            self.lbl_user.setText(f"👤 {nama} ({role})")
+            self.lbl_user.setVisible(True)
+            self.btn_admin.setText("🚪 Logout")
         else:
-            self._admin_window.raise_()
-            self._admin_window.activateWindow()
+            self._admin_logged_in = False
+            self.lbl_user.setText("")
+            self.lbl_user.setVisible(False)
+            self.btn_admin.setText("🔐 Login Admin")
+
+    @staticmethod
+    def _cek_jwt_valid(jwt_token: str) -> bool:
+        """Cek apakah JWT masih valid (belum expired)."""
+        if not jwt_token:
+            return False
+        try:
+            import jwt, time
+            payload = jwt.decode(jwt_token, options={"verify_signature": False})
+            return payload.get("exp", 0) > time.time()
+        except Exception:
+            return False
 
     def closeEvent(self, event) -> None:  # noqa: N802 — override Qt
         if self._cap is not None:

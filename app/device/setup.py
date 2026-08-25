@@ -174,7 +174,7 @@ def registrasi_device(
     return {}
 
 
-def simpan_config_lokal(api_key: str, device_id: str, jwt_token: str = "") -> None:
+def simpan_config_lokal(api_key: str, device_id: str, jwt_token: str = "", role: str = "", nama: str = "") -> None:
     """Simpan API key dan device ID ke config lokal."""
     os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
     config = {}
@@ -186,11 +186,23 @@ def simpan_config_lokal(api_key: str, device_id: str, jwt_token: str = "") -> No
     config["device_id"] = device_id
     if jwt_token:
         config["jwt_token"] = jwt_token
+    if role:
+        config["role"] = role
+    if nama:
+        config["admin_nama"] = nama
 
     with open(CONFIG_PATH, "w") as f:
         json.dump(config, f, indent=2)
 
     logger.info("Config tersimpan ke %s", CONFIG_PATH)
+
+
+def save_config_lokal(config: dict) -> None:
+    """Simpan dict config ke file lokal."""
+    os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+    with open(CONFIG_PATH, "w") as f:
+        json.dump(config, f, indent=2)
+    logger.info("Config disimpan ke %s", CONFIG_PATH)
 
 
 def load_config_lokal() -> dict:
@@ -276,7 +288,9 @@ def proses_login_google_manual(
             )
 
         # Simpan config
-        simpan_config_lokal(api_key, device_id, jwt_token)
+        simpan_config_lokal(api_key, device_id, jwt_token,
+                           role=login_data.get("role", ""),
+                           nama=login_data.get("nama", ""))
         update_env_file(api_key)
 
         return SetupResult(

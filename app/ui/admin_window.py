@@ -216,6 +216,9 @@ class LoginScreen(QWidget):
 
 
 class AdminWindow(QMainWindow):
+    logout_admin = Signal()
+    login_sukses_signal = Signal()
+
     def __init__(self, engine: MiniFASNetEngine, repo: AbsensiRepository,
                  server_url: str, face_encryption_key: str, device_id: str):
         super().__init__()
@@ -223,21 +226,40 @@ class AdminWindow(QMainWindow):
         self.resize(1000, 650)
         self.setStyleSheet(STYLESHEET_ADMIN)
 
-        # Cek apakah device sudah terdaftar
+        # Cek apakah device sudah terdaftar & user sudah login (JWT valid)
         config = load_config_lokal()
         sudah_terdaftar = (
             config.get("device_id") == device_id and
             config.get("api_key") and
             config.get("api_key") != "offline"
         )
+        sudah_login = sudah_terdaftar and self._cek_jwt_valid(config.get("jwt_token", ""))
 
-        if sudah_terdaftar:
+        if sudah_login:
             # Langsung ke dashboard
             role = config.get("role", "guru_piket")
             self._build_dashboard_ui(engine, repo, face_encryption_key, role, server_url)
         else:
             # Tampilkan login screen
             self._build_login_flow(engine, repo, server_url, face_encryption_key, device_id)
+        
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    @staticmethod
+    def _cek_jwt_valid(jwt_token: str) -> bool:
+        """Cek apakah JWT masih valid (belum expired)."""
+        if not jwt_token:
+            return False
+        try:
+            import jwt
+            payload = jwt.decode(jwt_token, options={"verify_signature": False})
+            exp = payload.get("exp", 0)
+            import time
+            return exp > time.time()
+        except Exception:
+            return False
 
     def _build_login_flow(self, engine, repo, server_url, face_encryption_key, device_id):
         main_widget = QWidget()
@@ -253,13 +275,21 @@ class AdminWindow(QMainWindow):
 
     def _on_login_success(self, token, engine, repo, server_url, face_encryption_key, device_id):
         """Setelah login berhasil, bangun dashboard admin."""
-        # Ambil role dari config
-        config = load_config_lokal()
-        role = config.get("role", "guru_piket")
-        self._build_dashboard_ui(engine, repo, face_encryption_key, role)
-        self.setWindowTitle(f"Panel Admin — {device_id} ({role})")
+        try:
+            config = load_config_lokal()
+            role = config.get("role", "guru_piket")
+            self._build_dashboard_ui(engine, repo, face_encryption_key, role, server_url)
+            self.setWindowTitle(f"Panel Admin — {device_id} ({role})")
+            self.login_sukses_signal.emit()
+            self.show()
+            self.raise_()
+            self.activateWindow()
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(self, "Error", f"Gagal membuka dashboard: {str(e)}")
 
-    def _build_dashboard_ui(self, engine, repo, face_encryption_key, role="guru_piket"):
+    def _build_dashboard_ui(self, engine, repo, face_encryption_key, role="guru_piket", server_url=""):
         """Bangun tampilan dashboard admin setelah login."""
         main_widget = QWidget()
         main_layout = QHBoxLayout(main_widget)
@@ -345,23 +375,35 @@ class AdminWindow(QMainWindow):
 
         side_layout.addStretch()
 
-        btn_tutup = QPushButton("❌ Tutup Panel")
+        btn_tutup = QPushButton("🚪 Logout & Tutup")
         btn_tutup.setObjectName("btnDanger")
-        btn_tutup.clicked.connect(self.close)
+        btn_tutup.clicked.connect(self._proses_logout)
         side_layout.addWidget(btn_tutup)
 
         main_layout.addWidget(sidebar)
         main_layout.addWidget(self.stack)
         self.setCentralWidget(main_widget)
 
-        # Info box
+        # Info box - gunakan QTimer agar tidak memblokir rendering dashboard
         config = load_config_lokal()
         api_key = config.get("api_key", "N/A")
         device_id = config.get("device_id", "N/A")
-        QMessageBox.information(
-            self, "Login Berhasil",
-            f"Device '{device_id}' terdaftar!\nAPI Key: {api_key[:16]}...\n\nAnda sekarang bisa menggunakan panel admin."
-        )
+        
+        def _show_info():
+            QMessageBox.information(
+                self, "Login Berhasil",
+                f"Device '{device_id}' terdaftar!\nAPI Key: {api_key[:16]}...\n\nAnda sekarang bisa menggunakan panel admin."
+            )
+        QTimer.singleShot(500, _show_info)
+
+    def _proses_logout(self):
+        """Logout: hapus role dari config, emit signal, tutup window."""
+        config = load_config_lokal()
+        config.pop("role", None)
+        config.pop("admin_nama", None)
+        save_config_lokal(config)
+        self.logout_admin.emit()
+        self.close()
 
     def _build_enroll_ui(self, parent: QWidget, engine, repo, face_encryption_key):
         layout = QVBoxLayout(parent)
@@ -516,3 +558,7 @@ class AdminWindow(QMainWindow):
         self.log_sync.setPlaceholderText("Log sinkronisasi akan muncul di sini...")
         layout.addWidget(self.log_sync)
         layout.addStretch()
+
+    def closeEvent(self, event):
+        self.logout_admin.emit()
+        super().closeEvent(event)
