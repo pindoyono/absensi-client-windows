@@ -76,7 +76,7 @@ class MiniFASNetEngine(FaceEngine):
         expanded = np.expand_dims(transposed, axis=0)
         return expanded
 
-    def proses_frame(self, frame_bgr: np.ndarray) -> HasilDeteksi:
+    def proses_frame(self, frame_bgr: np.ndarray, skip_liveness: bool = False) -> HasilDeteksi:
         gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
         faces = self.face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
 
@@ -92,19 +92,20 @@ class MiniFASNetEngine(FaceEngine):
         face_crop = frame_bgr[y:y+h, x:x+w]
 
         try:
-            input_tensor_liveness = self._preprocess_face(face_crop)
-            input_name_liveness = self.session_liveness.get_inputs()[0].name
-            liveness_out = self.session_liveness.run(None, {input_name_liveness: input_tensor_liveness})[0]
+            if not skip_liveness:
+                input_tensor_liveness = self._preprocess_face(face_crop)
+                input_name_liveness = self.session_liveness.get_inputs()[0].name
+                liveness_out = self.session_liveness.run(None, {input_name_liveness: input_tensor_liveness})[0]
 
-            is_real, real_score = evaluasi_liveness(liveness_out)
+                is_real, real_score = evaluasi_liveness(liveness_out)
 
-            if not is_real:
-                return HasilDeteksi(
-                    wajah_terdeteksi=True,
-                    lolos_liveness=False,
-                    embedding=None,
-                    alasan_gagal=f"Terdeteksi spoofing (skor: {real_score:.2f})"
-                )
+                if not is_real:
+                    return HasilDeteksi(
+                        wajah_terdeteksi=True,
+                        lolos_liveness=False,
+                        embedding=None,
+                        alasan_gagal=f"Terdeteksi spoofing (skor: {real_score:.2f})"
+                    )
 
             input_tensor_emb = self._preprocess_arcface(face_crop)
             emb_input_name = self.session_embedding.get_inputs()[0].name

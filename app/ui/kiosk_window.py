@@ -314,6 +314,9 @@ class KioskWindow(QWidget):
         if self._admin_window:
             self._admin_window.close()
 
+        # Pause kamera kiosk — admin window butuh akses kamera juga
+        self._pause_kamera()
+
         self._admin_window = AdminWindow(
             engine=self.engine,
             repo=self.repo,
@@ -323,8 +326,35 @@ class KioskWindow(QWidget):
         )
         self._admin_window.logout_admin.connect(self._on_admin_logout)
         self._admin_window.login_sukses_signal.connect(self._update_login_state)
+        # Resume kamera saat admin window ditutup
+        self._admin_window.window_closed.connect(self._resume_kamera)
         self._admin_window.show()
         self._admin_window.activateWindow()
+
+    def _pause_kamera(self) -> None:
+        """Hentikan timer & release kamera agar admin window bisa pakai."""
+        if hasattr(self, "_timer_kamera") and self._timer_kamera:
+            self._timer_kamera.stop()
+        if self._cap is not None:
+            self._cap.release()
+            self._cap = None
+
+    def _resume_kamera(self) -> None:
+        """Aktifkan kembali kamera setelah admin window ditutup."""
+        if self._cap is not None:
+            return  # Sudah aktif
+        self._cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+        if not self._cap.isOpened():
+            self._cap = cv2.VideoCapture(0)
+        if not self._cap.isOpened():
+            self._cap = None
+            self.label_hasil.setText("❌ Kamera tidak tersedia")
+            self.label_hasil.setStyleSheet(f"font-size: 15px; color: {WARNA['bahaya_teks']};")
+        else:
+            if not hasattr(self, "_timer_kamera") or self._timer_kamera is None:
+                self._timer_kamera = QTimer(self)
+                self._timer_kamera.timeout.connect(self._tick_kamera)
+            self._timer_kamera.start(INTERVAL_KAMERA_MS)
 
     def _on_admin_logout(self):
         """Handle logout dari admin window."""

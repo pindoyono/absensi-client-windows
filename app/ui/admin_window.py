@@ -23,7 +23,7 @@ from app.face.minifasnet_engine import MiniFASNetEngine
 from app.face.crypto_embedding import encrypt_embedding
 from app.device.setup import (
     proses_login_google_manual, load_config_lokal, simpan_config_lokal,
-    update_env_file, CONFIG_PATH,
+    save_config_lokal, update_env_file, CONFIG_PATH,
 )
 
 STYLESHEET_ADMIN = f"""
@@ -239,6 +239,7 @@ class LoginScreen(QWidget):
 class AdminWindow(QMainWindow):
     logout_admin = Signal()
     login_sukses_signal = Signal()
+    window_closed = Signal()
 
     def __init__(self, engine: MiniFASNetEngine, repo: AbsensiRepository,
                  server_url: str, face_encryption_key: str, device_id: str):
@@ -469,27 +470,77 @@ class AdminWindow(QMainWindow):
         
         self.btn_cam = QPushButton("🎥 Mulai Kamera")
         self.btn_cam.setObjectName("btnPrimary")
-        self.btn_cam.clicked.connect(lambda: self._start_cam(engine, repo, face_encryption_key))
+        self.btn_cam.clicked.connect(lambda: self._mulai_preview_kamera(engine, repo, face_encryption_key))
         rp.addWidget(self.btn_cam)
+
+        self.btn_capture = QPushButton("📸 Ambil Foto & Enroll")
+        self.btn_capture.setObjectName("btnPrimary")
+        self.btn_capture.setEnabled(False)
+        self.btn_capture.clicked.connect(lambda: self._capture_enroll(engine, repo, face_encryption_key))
+        rp.addWidget(self.btn_capture)
+
         rp.addStretch()
         mid.addLayout(rp)
         layout.addLayout(mid)
 
-    def _start_cam(self, engine, repo, face_encryption_key):
-        cap = cv2.VideoCapture(0)
+    def _mulai_preview_kamera(self, engine, repo, face_encryption_key):
+        """Mulai live preview kamera di label_cam."""
+        if hasattr(self, "_cap_enroll") and self._cap_enroll is not None:
+            return  # Sudah jalan
+
+        cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+        if not cap.isOpened():
+            cap = cv2.VideoCapture(0)
         if not cap.isOpened():
             self.lbl_status.setText("❌ Kamera tidak dapat dibuka!")
             return
-        
-        self.lbl_status.setText("⏳ Mengambil foto wajah...")
-        ok, frame = cap.read()
-        cap.release()
 
+        self._cap_enroll = cap
+        self._timer_enroll = QTimer(self)
+        self._timer_enroll.timeout.connect(lambda: self._update_preview_kamera())
+        self._timer_enroll.start(50)  # 20 fps
+
+        self.btn_cam.setEnabled(False)
+        self.btn_capture.setEnabled(True)
+        self.lbl_status.setText("✅ Kamera aktif. Arahkan wajah ke kamera, lalu klik 'Ambil Foto'.")
+
+    def _update_preview_kamera(self):
+        """Update frame kamera ke label_cam."""
+        if not hasattr(self, "_cap_enroll") or self._cap_enroll is None:
+            return
+        ok, frame = self._cap_enroll.read()
         if not ok:
-            self.lbl_status.setText("❌ Gagal capture frame kamera.")
+            return
+        # Simpan frame terakhir untuk capture
+        self._last_frame = frame.copy()
+        # Convert BGR ke RGB untuk QLabel
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        h, w, ch = rgb.shape
+        bytes_per_line = ch * w
+        from PySide6.QtGui import QImage
+        img = QImage(rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
+        self.label_cam.setPixmap(QPixmap.fromImage(img).scaled(
+            self.label_cam.width(), self.label_cam.height(), Qt.KeepAspectRatio
+        ))
+
+    def _capture_enroll(self, engine, repo, face_encryption_key):
+        """Capture frame terakhir dan enroll ke server."""
+        if not hasattr(self, "_last_frame") or self._last_frame is None:
+            self.lbl_status.setText("❌ Belum ada frame kamera. Klik 'Mulai Kamera' dulu.")
             return
 
-        hasil = engine.proses_frame(frame)
+        frame = self._last_frame
+        # Stop preview
+        if hasattr(self, "_timer_enroll"):
+            self._timer_enroll.stop()
+        if hasattr(self, "_cap_enroll") and self._cap_enroll is not None:
+            self._cap_enroll.release()
+            self._cap_enroll = None
+
+        self.btn_cam.setEnabled(True)
+        self.btn_capture.setEnabled(False)
+
+        hasil = engine.proses_frame(frame, skip_liveness=True)
         if hasil.embedding is None:
             self.lbl_status.setText(f"❌ Gagal deteksi wajah: {hasil.alasan_gagal}")
             return
@@ -526,25 +577,35 @@ class AdminWindow(QMainWindow):
 
             # 2. Kirim embedding ke server
             self.lbl_status.setText("⏳ Mengirim data wajah ke server...")
+            payload = {
+                "embedding": hasil.embedding.tolist(),
+                "model_version": "minifasnet-v1",
+            }
+            print(f"[DEBUG] Enroll payload: {len(payload['embedding'])} dim, model={payload['model_version']}")
             resp_enroll = requests.post(
                 f"{self.server_url}/siswa/{siswa_id}/enroll", headers=headers,
-                json={"embedding": hasil.embedding.tolist(), "model_version": engine.model_version},
-                timeout=15,
+                json=payload,
+                timeout=30,
             )
+            print(f"[DEBUG] Enroll response: {resp_enroll.status_code} {resp_enroll.text[:200]}")
             resp_enroll.raise_for_status()
 
         except requests.RequestException as e:
-            self.lbl_status.setText(f"❌ Gagal kirim ke server: {e}")
-            QMessageBox.critical(self, "Gagal", f"Enrollment TIDAK tersimpan di server.\n\n{e}")
-            return
+            err_msg = str(e)
+            if e.response is not None:
+                err_msg = f"{e.response.status_code} {e.response.reason}: {e.response.text[:300]}"
+            print(f"[DEBUG] enrollment server error: {err_msg}")
+            # Tetap simpan lokal meski server gagal
+            self.lbl_status.setText(f"⚠️ Server gagal, disimpan lokal saja: {err_msg}")
+            QMessageBox.warning(self, "Peringatan", f"Enrollment gagal ke server.\n\n{err_msg}\n\nData disimpan lokal saja.")
 
-        # 3. Baru cache ke lokal
+        # 3. Baru cache ke lokal (selalu, bahkan bila server gagal)
         repo.upsert_siswa(siswa_id, nis, nama, kelas)
         enc = encrypt_embedding(hasil.embedding, face_encryption_key)
         repo.upsert_embedding(siswa_id, enc, engine.model_version, datetime.now().isoformat())
 
-        self.lbl_status.setText(f"✅ {nama} berhasil di-enroll (tersimpan di server)!")
-        QMessageBox.information(self, "Berhasil", f"Siswa {nama} berhasil di-enroll ke SERVER.")
+        self.lbl_status.setText(f"✅ {nama} berhasil di-enroll!")
+        QMessageBox.information(self, "Berhasil", f"Siswa {nama} berhasil di-enroll.")
 
     def _build_data_ui(self, parent: QWidget, repo: AbsensiRepository):
         layout = QVBoxLayout(parent)
@@ -637,4 +698,5 @@ class AdminWindow(QMainWindow):
 
     def closeEvent(self, event):
         self.logout_admin.emit()
+        self.window_closed.emit()
         super().closeEvent(event)
