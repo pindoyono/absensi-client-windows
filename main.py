@@ -65,6 +65,10 @@ def main() -> int:
         gunakan_kamera=True,
     )
     window.resize(500, 640)
+    
+    # Cek konektivitas sebelum window ditampilkan
+    window.set_status_online(api.cek_koneksi())
+    
     window.showFullScreen()  # kiosk mode — ganti window.show() saat development
 
     sync_service = SyncService(repo, api)

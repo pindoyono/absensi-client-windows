@@ -56,7 +56,9 @@ class ApiClient:
         try:
             resp = requests.get(f"{self.base_url}/health", timeout=3)
             return resp.status_code == 200
-        except requests.RequestException:
+        except requests.RequestException as e:
+            import logging
+            logging.getLogger(__name__).warning("cek_koneksi gagal: %s", e)
             return False
 
     def sync_absensi(self, records: list[RekamanAbsensi]) -> list[HasilSyncItem]:

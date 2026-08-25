@@ -491,3 +491,73 @@ def mulai_google_oauth_flow(
     thread.start()
 
     return None  # Flow berjalan async
+
+
+def mulai_google_oauth_flow_sync(
+    server_url: str,
+    device_id: str,
+    nama_lokasi: str = "",
+) -> LoginResult:
+    """
+    Versi sinkron dari mulai_google_oauth_flow.
+    Buka browser → login → callback → register.
+    Dipanggil dari thread terpisah agar tidak memblokir GUI.
+    Return: LoginResult
+    """
+    client_id = get_client_id()
+    result = LoginResult()
+
+    if not client_id:
+        result.error = (
+            "Google Client ID belum dikonfigurasi.\n"
+            "Set env GOOGLE_CLIENT_ID atau isi google_client_id di data/device_config.json.\n"
+            "Bisa juga paste token manual di bawah."
+        )
+        return result
+
+    try:
+        server = OAuthCallbackServer()
+    except Exception as e:
+        result.error = f"Gagal menjalankan server lokal: {e}"
+        return result
+
+    redirect_uri = REDIRECT_URI
+
+    # Build Google OAuth URL (Implicit flow — ID token langsung di fragment)
+    nonce = base64.urlsafe_b64encode(os.urandom(16)).decode("ascii")
+    auth_params = urllib.parse.urlencode({
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "response_type": "id_token",
+        "scope": SCOPES,
+        "prompt": "consent",
+        "nonce": nonce,
+    })
+    auth_url = f"{GOOGLE_AUTH_URL}?{auth_params}"
+
+    import webbrowser
+    webbrowser.open(auth_url)
+
+    try:
+        code, error = server.start_and_wait(timeout=300)
+    except Exception as e:
+        result.error = f"Server error: {e}"
+        return result
+
+    if error or not code:
+        result.error = f"Login Google gagal: {error or 'Tidak ada ID token diterima'}"
+        return result
+
+    id_token = code
+    if not id_token:
+        result.error = "Tidak mendapat ID token dari Google"
+        return result
+
+    result = proses_oauth_token(
+        server_url=server_url,
+        id_token=id_token,
+        device_id=device_id,
+        nama_lokasi=nama_lokasi,
+        google_client_id=client_id,
+    )
+    return result

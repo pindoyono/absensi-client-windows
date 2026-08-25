@@ -153,31 +153,57 @@ class LoginScreen(QWidget):
         self.btn_google.setText("⏳ Menyiapkan...")
         self._progress("Mencari port lokal untuk callback...")
 
-        from app.device.oauth_server import mulai_google_oauth_flow
+        from app.device.oauth_server import mulai_google_oauth_flow_sync
 
-        try:
-            result = mulai_google_oauth_flow(
-                server_url=self.server_url,
-                device_id=self.device_id,
-                nama_lokasi=self.input_lokasi.text().strip() or "Gerbang Utama",
-                on_progress=self._progress,
-                on_success=self._on_oauth_sukses,
-                on_error=self._on_oauth_error,
+        server_url = self.server_url
+        device_id = self.device_id
+        nama_lokasi = self.input_lokasi.text().strip() or "Gerbang Utama"
+
+        def _run():
+            hasil = mulai_google_oauth_flow_sync(
+                server_url=server_url,
+                device_id=device_id,
+                nama_lokasi=nama_lokasi,
             )
-            if result is None:
-                # Flow dimulai di background thread, tunggu callback
-                self.btn_google.setText("🌐 Menunggu login Google di browser...")
+            # Gunakan QMetaObject.invokeMethod agar callback dijalankan di GUI thread
+            from PySide6.QtCore import QMetaObject, Q_ARG, Qt as QtConst
+            if hasil.success:
+                QMetaObject.invokeMethod(
+                    self, "_on_oauth_sukses_thread",
+                    QtConst.QueuedConnection,
+                    Q_ARG(str, hasil.api_key), Q_ARG(str, hasil.nama),
+                )
             else:
-                # Error langsung
-                self._on_oauth_error(result)
-        except Exception as e:
-            self._on_oauth_error(str(e))
+                QMetaObject.invokeMethod(
+                    self, "_on_oauth_error_thread",
+                    QtConst.QueuedConnection,
+                    Q_ARG(str, hasil.error),
+                )
+
+        import threading
+        threading.Thread(target=_run, daemon=True).start()
+        self.btn_google.setText("🌐 Menunggu login Google di browser...")
+
+    # Decorator agar PySide5/6 bisa memanggil dari QMetaObject.invokeMethod
+    from PySide6.QtCore import Slot
+    @Slot(str, str)
+    def _on_oauth_sukses_thread(self, api_key: str, nama: str):
+        print("[DEBUG] _on_oauth_sukses_thread called, api_key=" + api_key[:16] + "...")
+        self._on_oauth_sukses(api_key, nama)
+
+    @Slot(str)
+    def _on_oauth_error_thread(self, msg: str):
+        self._on_oauth_error(msg)
 
     def _on_oauth_sukses(self, api_key: str, nama: str):
         """Callback saat OAuth + registrasi berhasil."""
         self._sukses(f"✅ Berhasil! Device terdaftar sebagai '{nama}'")
         self.btn_google.setText("✅ Selesai")
-        QTimer.singleShot(1500, lambda: self.login_berhasil.emit("oauth_done"))
+        # Ambil token dari config yang baru disimpan
+        config = load_config_lokal()
+        token = config.get("jwt_token", "oauth_done")
+        print(f"[DEBUG] emitting login_berhasil with token: {token[:10]}...")
+        self.login_berhasil.emit(token)
 
     def _on_oauth_error(self, msg: str):
         self._error(msg)
@@ -188,11 +214,6 @@ class LoginScreen(QWidget):
         token = self.input_token.text().strip()
         if not token:
             self._error("Token harus diisi!")
-            return
-        if token.lower() == "offline":
-            from app.device.setup import simpan_config_lokal
-            simpan_config_lokal("offline", self.device_id, "offline")
-            self.login_berhasil.emit("offline_token")
             return
 
         self.btn_manual.setEnabled(False)
@@ -277,13 +298,25 @@ class AdminWindow(QMainWindow):
         """Setelah login berhasil, bangun dashboard admin."""
         try:
             config = load_config_lokal()
+            self.jwt_token = config.get("jwt_token", "")
+            self.server_url = server_url
             role = config.get("role", "guru_piket")
             self._build_dashboard_ui(engine, repo, face_encryption_key, role, server_url)
             self.setWindowTitle(f"Panel Admin — {device_id} ({role})")
             self.login_sukses_signal.emit()
+            
+            # Force to front
+            self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
+            self.setWindowState(self.windowState() & ~Qt.WindowMinimized | Qt.WindowActive)
             self.show()
             self.raise_()
             self.activateWindow()
+            
+            # Kembalikan ke normal setelah muncul agar tidak mengganggu dialog lain
+            QTimer.singleShot(1000, lambda: self.setWindowFlags(self.windowFlags() & ~Qt.WindowStaysOnTopHint))
+            QTimer.singleShot(1100, self.show) 
+            
+            print("[DEBUG] done")
         except Exception as e:
             import traceback
             traceback.print_exc()
@@ -383,6 +416,8 @@ class AdminWindow(QMainWindow):
         main_layout.addWidget(sidebar)
         main_layout.addWidget(self.stack)
         self.setCentralWidget(main_widget)
+        self.stack.setCurrentIndex(0) # Pastikan halaman pertama (Enrollment) tampil
+        self.update() # Paksa refresh UI
 
         # Info box - gunakan QTimer agar tidak memblokir rendering dashboard
         config = load_config_lokal()
@@ -455,20 +490,61 @@ class AdminWindow(QMainWindow):
             return
 
         hasil = engine.proses_frame(frame)
-        if hasil.embedding is not None:
-            import random
-            siswa_id = random.randint(1000, 9999)
-            nis = self.input_nis.text().strip() or "NIS999"
-            nama = self.input_nama.text().strip() or "Siswa Baru"
-            kelas = self.input_kelas.text().strip() or "XI"
-
-            repo.upsert_siswa(siswa_id, nis, nama, kelas)
-            enc = encrypt_embedding(hasil.embedding, face_encryption_key)
-            repo.upsert_embedding(siswa_id, enc, engine.model_version, datetime.now().isoformat())
-            self.lbl_status.setText(f"✅ Sukses enroll: {nama} ({kelas})!")
-            QMessageBox.information(self, "Berhasil", f"Siswa {nama} berhasil di-enroll ke database lokal!")
-        else:
+        if hasil.embedding is None:
             self.lbl_status.setText(f"❌ Gagal deteksi wajah: {hasil.alasan_gagal}")
+            return
+
+        nis = self.input_nis.text().strip()
+        nama = self.input_nama.text().strip()
+        kelas = self.input_kelas.text().strip()
+        if not nis or not nama or not kelas:
+            self.lbl_status.setText("❌ NIS, nama, dan kelas wajib diisi.")
+            return
+
+        if not self.jwt_token:
+            self.lbl_status.setText("❌ Sesi login tidak valid, silakan login ulang.")
+            return
+
+        headers = {"Authorization": f"Bearer {self.jwt_token}"}
+        self.lbl_status.setText("⏳ Mendaftarkan siswa ke server...")
+
+        try:
+            # 1. Cari siswa yang sudah ada berdasarkan NIS, atau buat baru
+            resp_list = requests.get(f"{self.server_url}/siswa", headers=headers, timeout=15)
+            resp_list.raise_for_status()
+            existing = next((s for s in resp_list.json() if s["nis"] == nis), None)
+
+            if existing:
+                siswa_id = existing["id"]
+            else:
+                resp_create = requests.post(
+                    f"{self.server_url}/siswa", headers=headers,
+                    json={"nis": nis, "nama": nama, "kelas": kelas}, timeout=15,
+                )
+                resp_create.raise_for_status()
+                siswa_id = resp_create.json()["id"]
+
+            # 2. Kirim embedding ke server
+            self.lbl_status.setText("⏳ Mengirim data wajah ke server...")
+            resp_enroll = requests.post(
+                f"{self.server_url}/siswa/{siswa_id}/enroll", headers=headers,
+                json={"embedding": hasil.embedding.tolist(), "model_version": engine.model_version},
+                timeout=15,
+            )
+            resp_enroll.raise_for_status()
+
+        except requests.RequestException as e:
+            self.lbl_status.setText(f"❌ Gagal kirim ke server: {e}")
+            QMessageBox.critical(self, "Gagal", f"Enrollment TIDAK tersimpan di server.\n\n{e}")
+            return
+
+        # 3. Baru cache ke lokal
+        repo.upsert_siswa(siswa_id, nis, nama, kelas)
+        enc = encrypt_embedding(hasil.embedding, face_encryption_key)
+        repo.upsert_embedding(siswa_id, enc, engine.model_version, datetime.now().isoformat())
+
+        self.lbl_status.setText(f"✅ {nama} berhasil di-enroll (tersimpan di server)!")
+        QMessageBox.information(self, "Berhasil", f"Siswa {nama} berhasil di-enroll ke SERVER.")
 
     def _build_data_ui(self, parent: QWidget, repo: AbsensiRepository):
         layout = QVBoxLayout(parent)
