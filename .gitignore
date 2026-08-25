@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.env
+venv/
+.venv/
+*.egg-info/
+.pytest_cache/
+.DS_Store
+*.log
+
+# Data lokal device (database terenkripsi + hasil build)
+data/
+*.db
+dist/
+build/
+*.spec
+Output/

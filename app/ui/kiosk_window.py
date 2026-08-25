@@ -1,0 +1,295 @@
+"""
+Window kiosk utama — implementasi dari mockup yang sudah disetujui
+sebelumnya (foto besar, nama+kelas, kartu status warna, badge jaringan).
+Alur: timer kamera -> FaceEngine -> matcher -> business logic -> tampilkan
+hasil beberapa detik -> kembali ke idle.
+"""
+from __future__ import annotations
+
+from datetime import datetime, time as dtime
+
+import cv2
+import numpy as np
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QSizePolicy, QPushButton,
+)
+
+from app.business.attendance_logic import proses_absen, HasilAbsen
+from app.database.repository import AbsensiRepository
+from app.face.engine_base import FaceEngine
+from app.face.matcher import cari_siswa_cocok
+from app.ui.styles import WARNA, STYLESHEET_DASAR
+
+DURASI_TAMPIL_HASIL_MS = 3500
+INTERVAL_KAMERA_MS = 200
+
+
+class KioskWindow(QWidget):
+    def __init__(
+        self, repo: AbsensiRepository, engine: FaceEngine,
+        device_id: str, face_encryption_key: str,
+        jam_masuk_standar: dtime, jam_pulang_standar: dtime,
+        gunakan_kamera: bool = True, parent=None,
+    ):
+        super().__init__(parent)
+        self.repo = repo
+        self.engine = engine
+        self.device_id = device_id
+        self.face_encryption_key = face_encryption_key
+        self.jam_masuk_standar = jam_masuk_standar
+        self.jam_pulang_standar = jam_pulang_standar
+
+        self._status_online = True
+        self._menampilkan_hasil = False
+        self._cap: cv2.VideoCapture | None = None
+
+        self.setWindowTitle("Absensi SMK — Kiosk")
+        self.setStyleSheet(STYLESHEET_DASAR)
+        self._bangun_ui()
+
+        self._timer_reset = QTimer(self)
+        self._timer_reset.setSingleShot(True)
+        self._timer_reset.timeout.connect(self._kembali_ke_idle)
+
+        if gunakan_kamera:
+            self._cap = cv2.VideoCapture(0)
+            self._timer_kamera = QTimer(self)
+            self._timer_kamera.timeout.connect(self._tick_kamera)
+            self._timer_kamera.start(INTERVAL_KAMERA_MS)
+
+        self._timer_jam = QTimer(self)
+        self._timer_jam.timeout.connect(self._update_jam)
+        self._timer_jam.start(1000)
+        self._update_jam()
+
+    # ---------- UI ----------
+
+    def _bangun_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        kartu = QFrame(objectName="kartu")
+        kartu.setStyleSheet(
+            f"#kartu {{ background-color: {WARNA['surface']}; border-radius: 12px; "
+            f"border: 1px solid {WARNA['border']}; }}"
+        )
+        kartu.setFixedWidth(420)
+        kartu_layout = QVBoxLayout(kartu)
+        kartu_layout.setContentsMargins(0, 0, 0, 0)
+        kartu_layout.setSpacing(0)
+
+        # Header: status jaringan + jam + tombol admin
+        header = QHBoxLayout()
+        header.setContentsMargins(20, 14, 20, 14)
+        self.label_status_jaringan = QLabel("● Online · tersinkron")
+        self.label_status_jaringan.setStyleSheet(f"color: {WARNA['sukses_teks']}; font-size: 13px;")
+        
+        self.label_jam = QLabel("--:--")
+        self.label_jam.setObjectName("jamTampilan")
+
+        # Tombol Login / Admin yang jelas terlihat di header
+        self.btn_admin = QPushButton("⚙ Admin / Login")
+        self.btn_admin.setCursor(Qt.PointingHandCursor)
+        self.btn_admin.setStyleSheet(
+            f"background-color: {WARNA['surface_2']}; color: {WARNA['teks_utama']}; "
+            f"border: 1px solid {WARNA['border']}; border-radius: 6px; padding: 4px 10px; font-size: 12px;"
+        )
+        self.btn_admin.clicked.connect(self._buka_admin)
+
+        header.addWidget(self.label_status_jaringan)
+        header.addStretch()
+        header.addWidget(self.btn_admin)
+        header.addWidget(self.label_jam)
+        kartu_layout.addLayout(header)
+
+        garis = QFrame()
+        garis.setFixedHeight(1)
+        garis.setStyleSheet(f"background-color: {WARNA['border']};")
+        kartu_layout.addWidget(garis)
+
+        # -- Body: foto + status --
+        body = QVBoxLayout()
+        body.setContentsMargins(20, 28, 20, 20)
+        body.setAlignment(Qt.AlignHCenter)
+
+        self.label_foto = QLabel()
+        self.label_foto.setFixedSize(160, 160)
+        self.label_foto.setAlignment(Qt.AlignCenter)
+        self.label_foto.setStyleSheet(
+            f"background-color: {WARNA['surface_2']}; border-radius: 12px; "
+            f"border: 2px solid {WARNA['border']};"
+        )
+        self.label_foto.setText("👤")
+        self.label_foto.setStyleSheet(self.label_foto.styleSheet() + "font-size: 56px;")
+        body.addWidget(self.label_foto, alignment=Qt.AlignHCenter)
+        body.addSpacing(20)
+
+        self.label_hasil = QLabel("Arahkan wajah ke kamera")
+        self.label_hasil.setAlignment(Qt.AlignHCenter)
+        self.label_hasil.setStyleSheet(f"font-size: 15px; color: {WARNA['teks_sekunder']};")
+        body.addWidget(self.label_hasil)
+
+        self.label_nama = QLabel("")
+        self.label_nama.setObjectName("namaSiswa")
+        self.label_nama.setAlignment(Qt.AlignHCenter)
+        body.addWidget(self.label_nama)
+
+        self.label_kelas = QLabel("")
+        self.label_kelas.setObjectName("kelasSiswa")
+        self.label_kelas.setAlignment(Qt.AlignHCenter)
+        body.addWidget(self.label_kelas)
+
+        body.addSpacing(16)
+
+        self.kartu_status = QFrame()
+        self.kartu_status.setFixedWidth(380)
+        status_layout = QHBoxLayout(self.kartu_status)
+        status_layout.setAlignment(Qt.AlignCenter)
+        self.label_status_detail = QLabel("")
+        self.label_status_detail.setAlignment(Qt.AlignCenter)
+        status_layout.addWidget(self.label_status_detail)
+        self.kartu_status.setVisible(False)
+        body.addWidget(self.kartu_status, alignment=Qt.AlignHCenter)
+
+        kartu_layout.addLayout(body)
+
+        footer = QLabel("Arahkan wajah ke kamera untuk siswa berikutnya")
+        footer.setAlignment(Qt.AlignHCenter)
+        footer.setStyleSheet(f"color: {WARNA['teks_muted']}; font-size: 12px; padding: 12px;")
+        kartu_layout.addWidget(footer)
+
+        outer = QHBoxLayout()
+        outer.addStretch()
+        outer.addWidget(kartu)
+        outer.addStretch()
+        layout.addStretch()
+        layout.addLayout(outer)
+        layout.addStretch()
+
+    def _update_jam(self) -> None:
+        self.label_jam.setText(datetime.now().strftime("%H:%M"))
+
+    def set_status_online(self, online: bool) -> None:
+        self._status_online = online
+        if online:
+            self.label_status_jaringan.setText("● Online · tersinkron")
+            self.label_status_jaringan.setStyleSheet(f"color: {WARNA['sukses_teks']}; font-size: 13px;")
+        else:
+            self.label_status_jaringan.setText("● Offline · disimpan lokal")
+            self.label_status_jaringan.setStyleSheet(f"color: {WARNA['teks_muted']}; font-size: 13px;")
+
+    # ---------- Alur kamera ----------
+
+    def _tick_kamera(self) -> None:
+        if self._cap is None:
+            return
+        ok, frame = self._cap.read()
+        if not ok:
+            return
+
+        # Update pratinjau kamera live ke UI jika sedang tidak menampilkan hasil absensi
+        if not self._menampilkan_hasil:
+            h, w, ch = frame.shape
+            bytes_per_line = ch * w
+            # Format BGR ke RGB untuk Qt
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            q_img = QImage(frame_rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
+            # Crop center/scaled ke ukuran 160x160
+            pixmap = QPixmap.fromImage(q_img).scaled(160, 160, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+            self.label_foto.setPixmap(pixmap)
+
+            self._proses_frame(frame)
+
+    def _proses_frame(self, frame_bgr: np.ndarray) -> None:
+        hasil_deteksi = self.engine.proses_frame(frame_bgr)
+        if not hasil_deteksi.wajah_terdeteksi or not hasil_deteksi.lolos_liveness:
+            return
+
+        match = cari_siswa_cocok(hasil_deteksi.embedding, self.repo, self.engine, self.face_encryption_key)
+        if not match.ditemukan:
+            self._tampilkan_hasil_wajah_tidak_dikenali()
+            return
+
+        jadwal = self.repo.jadwal_untuk_kelas(match.kelas)
+        jam_masuk = self._parse_jam(jadwal["jam_masuk"]) if jadwal else self.jam_masuk_standar
+        jam_pulang = self._parse_jam(jadwal["jam_pulang"]) if jadwal else self.jam_pulang_standar
+
+        keputusan = proses_absen(
+            self.repo, match.siswa_id, self.device_id, jam_masuk, jam_pulang,
+        )
+        self._tampilkan_keputusan(match.nama, match.kelas, keputusan)
+
+    @staticmethod
+    def _parse_jam(teks: str) -> dtime:
+        jam, menit = teks.split(":")[:2]
+        return dtime(hour=int(jam), minute=int(menit))
+
+    # ---------- Tampilan hasil ----------
+
+    def _tampilkan_keputusan(self, nama: str, kelas: str, keputusan) -> None:
+        self._menampilkan_hasil = True
+        self.label_nama.setText(nama)
+        self.label_kelas.setText(kelas)
+
+        if keputusan.hasil == HasilAbsen.DITOLAK_SUDAH_ABSEN:
+            self._set_kartu_status(keputusan.pesan, WARNA["bahaya_teks"], WARNA["bahaya_bg"])
+            self.label_hasil.setText("Sudah absen")
+            self.label_hasil.setStyleSheet(f"font-size: 15px; color: {WARNA['bahaya_teks']};")
+        else:
+            aksi = "masuk" if keputusan.hasil == HasilAbsen.BERHASIL_MASUK else "pulang"
+            status = keputusan.rekaman.status_kehadiran_otomatis
+            warna_teks = WARNA["sukses_teks"] if status == "NORMAL" else WARNA["warning_teks"]
+            warna_bg = WARNA["sukses_bg"] if status == "NORMAL" else WARNA["warning_bg"]
+            self.label_hasil.setText(f"Absen {aksi} berhasil")
+            self.label_hasil.setStyleSheet(f"font-size: 15px; color: {warna_teks};")
+            self._set_kartu_status(keputusan.pesan, warna_teks, warna_bg)
+
+        self._timer_reset.start(DURASI_TAMPIL_HASIL_MS)
+
+    def _tampilkan_hasil_wajah_tidak_dikenali(self) -> None:
+        self._menampilkan_hasil = True
+        self.label_nama.setText("")
+        self.label_kelas.setText("")
+        self.label_hasil.setText("Wajah tidak dikenali")
+        self.label_hasil.setStyleSheet(f"font-size: 15px; color: {WARNA['teks_muted']};")
+        self._set_kartu_status("Pastikan sudah terdaftar / coba lagi", WARNA["teks_muted"], WARNA["netral_bg"])
+        self._timer_reset.start(DURASI_TAMPIL_HASIL_MS)
+
+    def _set_kartu_status(self, teks: str, warna_teks: str, warna_bg: str) -> None:
+        self.kartu_status.setStyleSheet(f"background-color: {warna_bg}; border-radius: 8px; padding: 8px;")
+        self.label_status_detail.setText(teks)
+        self.label_status_detail.setStyleSheet(f"color: {warna_teks}; font-size: 13px;")
+        self.kartu_status.setVisible(True)
+
+    def _kembali_ke_idle(self) -> None:
+        self._menampilkan_hasil = False
+        self.label_nama.setText("")
+        self.label_kelas.setText("")
+        self.label_hasil.setText("Arahkan wajah ke kamera")
+        self.label_hasil.setStyleSheet(f"font-size: 15px; color: {WARNA['teks_sekunder']};")
+        self.kartu_status.setVisible(False)
+
+    def _buka_admin(self, event=None):
+        """Buka jendela Admin/Guru Piket untuk enrollment, jadwal, dll."""
+        from app.ui.admin_window import AdminWindow
+        if not hasattr(self, '_admin_window') or self._admin_window is None or not self._admin_window.isVisible():
+            self._admin_window = AdminWindow(
+                engine=self.engine,
+                repo=self.repo,
+                server_url="https://absen.smkn2malinau.sch.id", # Bisa diganti dari settings
+                face_encryption_key=self.face_encryption_key,
+                device_id=self.device_id,
+            )
+            self._admin_window.show()
+            self._admin_window.activateWindow()
+        else:
+            self._admin_window.raise_()
+            self._admin_window.activateWindow()
+
+    def closeEvent(self, event) -> None:  # noqa: N802 — override Qt
+        if self._cap is not None:
+            self._cap.release()
+        super().closeEvent(event)
