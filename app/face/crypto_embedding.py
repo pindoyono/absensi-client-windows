@@ -6,6 +6,7 @@ admin ke tiap device (lihat docs/API_CONTRACT.md bagian 7, Opsi A).
 """
 import struct
 
+import numpy as np
 from cryptography.fernet import Fernet, InvalidToken
 
 

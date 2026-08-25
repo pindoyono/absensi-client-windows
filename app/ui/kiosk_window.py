@@ -81,21 +81,26 @@ class KioskWindow(QWidget):
         kartu_layout.setContentsMargins(0, 0, 0, 0)
         kartu_layout.setSpacing(0)
 
-        # Header: status jaringan + jam + tombol admin
+        # Header: status jaringan + tombol admin + jam
         header = QHBoxLayout()
-        header.setContentsMargins(20, 14, 20, 14)
+        header.setContentsMargins(16, 12, 16, 12)
+        header.setSpacing(10)
+
         self.label_status_jaringan = QLabel("● Online · tersinkron")
         self.label_status_jaringan.setStyleSheet(f"color: {WARNA['sukses_teks']}; font-size: 13px;")
-        
+
         self.label_jam = QLabel("--:--")
         self.label_jam.setObjectName("jamTampilan")
+        self.label_jam.setStyleSheet(f"color: {WARNA['teks_utama']}; font-size: 13px; font-weight: 600;")
 
         # Tombol Login / Admin yang jelas terlihat di header
         self.btn_admin = QPushButton("⚙ Admin / Login")
         self.btn_admin.setCursor(Qt.PointingHandCursor)
+        self.btn_admin.setMinimumHeight(32)
         self.btn_admin.setStyleSheet(
-            f"background-color: {WARNA['surface_2']}; color: {WARNA['teks_utama']}; "
-            f"border: 1px solid {WARNA['border']}; border-radius: 6px; padding: 4px 10px; font-size: 12px;"
+            f"QPushButton {{ background-color: {WARNA['surface_2']}; color: {WARNA['teks_utama']}; "
+            f"border: 1px solid {WARNA['border']}; border-radius: 6px; padding: 4px 12px; font-size: 12px; font-weight: 600; }}"
+            f"QPushButton:hover {{ background-color: {WARNA['border']}; }}"
         )
         self.btn_admin.clicked.connect(self._buka_admin)
 

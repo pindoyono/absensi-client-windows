@@ -12,7 +12,6 @@ from app.api.client import ApiClient
 from app.config import settings
 from app.database.db import get_connection
 from app.database.repository import AbsensiRepository
-from app.face.opencv_engine import OpenCVPlaceholderEngine
 from app.sync.service import SyncService
 from app.sync.worker import SyncWorker
 from app.ui.kiosk_window import KioskWindow
@@ -39,17 +38,18 @@ def main() -> int:
     conn = get_connection()
     repo = AbsensiRepository(conn)
 
-    # PENTING: OpenCVPlaceholderEngine BUKAN untuk produksi (lihat
-    # app/face/engine_base.py). Ganti dengan adapter MiniFASNet di sini
-    # sebelum pilot dengan siswa asli.
-    from app.ui.kiosk_window import KioskWindow
-    from app.ui.admin_window import AdminWindow
+    # PENTING: liveness detection sudah aktif (bug hardcode is_real=True
+    # sudah diperbaiki), TAPI AMBANG_LIVENESS dan INDEKS_KELAS_LIVE di
+    # app/face/minifasnet_engine.py masih nilai awal, BELUM dikalibrasi
+    # dengan pengujian foto/video spoofing sungguhan (Skenario 5 & 6 di
+    # prompt pengujian webcam). Jangan anggap "siap produksi" sebelum itu.
     from app.face.minifasnet_engine import MiniFASNetEngine
     engine = MiniFASNetEngine(
         path_model_liveness="models/minifasnet.onnx",
     )
-    logger.info(
-        "Memakai %s — siap untuk produksi.",
+    logger.warning(
+        "Memakai %s — liveness AKTIF tapi ambang batas BELUM divalidasi "
+        "dengan uji spoofing foto/video sungguhan. Jangan pilot dulu.",
         engine.model_version,
     )
 

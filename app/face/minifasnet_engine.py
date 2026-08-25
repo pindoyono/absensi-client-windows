@@ -7,6 +7,39 @@ import onnxruntime as ort
 
 from app.face.engine_base import FaceEngine, HasilDeteksi
 
+# Ambang batas skor liveness — PERLU DIKALIBRASI dengan data nyata,
+# sama seperti AMBANG_BATAS_JARAK di matcher.py. Nilai 0.7 di bawah
+# adalah titik awal yang wajar, BUKAN hasil kalibrasi sungguhan.
+AMBANG_LIVENESS = 0.7
+
+# Indeks kelas "wajah asli" pada output model. Berdasarkan dokumentasi
+# model open-source (minivision-ai/Silent-Face-Anti-Spoofing) urutan
+# kelasnya [live, print-attack, replay-attack] -> live di indeks 0.
+# WAJIB DIVERIFIKASI dengan Skenario 5 & 6 di prompt pengujian webcam:
+# todongkan FOTO ke kamera — kalau masih lolos sebagai "asli", coba
+# ubah nilai ini ke 1 atau 2 dan test ulang.
+INDEKS_KELAS_LIVE = 0
+
+
+def evaluasi_liveness(
+    output_model: np.ndarray, ambang: float = AMBANG_LIVENESS, indeks_live: int = INDEKS_KELAS_LIVE,
+) -> tuple[bool, float]:
+    """
+    Fungsi MURNI (tidak butuh model/kamera) — dipisah dari proses_frame()
+    supaya logika keputusan liveness bisa diuji unit test langsung
+    dengan output tiruan, tanpa perlu jalankan inference sungguhan.
+    Ini titik yang sebelumnya bug (is_real di-hardcode True).
+
+    Return: (is_real, skor_live)
+    """
+    if output_model.ndim == 2 and output_model.shape[1] > indeks_live:
+        skor_live = float(output_model[0][indeks_live])
+    else:
+        skor_live = float(output_model[0].item() if hasattr(output_model[0], "item") else output_model[0])
+
+    is_real = skor_live > ambang
+    return is_real, skor_live
+
 
 class MiniFASNetEngine(FaceEngine):
     def __init__(self, path_model_liveness: str, path_model_embedding: str | None = None):
@@ -62,13 +95,8 @@ class MiniFASNetEngine(FaceEngine):
             input_tensor_liveness = self._preprocess_face(face_crop)
             input_name_liveness = self.session_liveness.get_inputs()[0].name
             liveness_out = self.session_liveness.run(None, {input_name_liveness: input_tensor_liveness})[0]
-            
-            if liveness_out.ndim == 2 and liveness_out.shape[1] >= 2:
-                real_score = float(liveness_out[0][1])
-            else:
-                real_score = float(liveness_out[0].item() if hasattr(liveness_out[0], 'item') else liveness_out[0])
 
-            is_real = True
+            is_real, real_score = evaluasi_liveness(liveness_out)
 
             if not is_real:
                 return HasilDeteksi(

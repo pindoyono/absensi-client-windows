@@ -19,15 +19,20 @@ class SyncWorker(QThread):
         self._berjalan = True
 
     def run(self) -> None:
-        while self._berjalan:
+        while self._berjalan and not self.isInterruptionRequested():
             try:
                 ringkasan = self.service.siklus_sync()
                 self.siklus_selesai.emit(ringkasan)
             except Exception as e:  # noqa: BLE001 — sync worker TIDAK BOLEH mati karena 1 error
                 self.siklus_selesai.emit(RingkasanSiklus(online=False, pesan_error=str(e)))
 
-            self.sleep(self.interval_detik)
+            # Tidur bertahap supaya thread bisa berhenti cepat saat app ditutup.
+            for _ in range(self.interval_detik):
+                if not self._berjalan or self.isInterruptionRequested():
+                    break
+                self.sleep(1)
 
     def berhenti(self) -> None:
         self._berjalan = False
-        self.wait(2000)
+        self.requestInterruption()
+        self.wait(5000)
