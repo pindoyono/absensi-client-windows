@@ -4,11 +4,14 @@ dan Pengaturan Lainnya.
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 import cv2
 import numpy as np
 import requests
 import webbrowser
+
+logger = logging.getLogger(__name__)
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
@@ -188,7 +191,7 @@ class LoginScreen(QWidget):
     from PySide6.QtCore import Slot
     @Slot(str, str)
     def _on_oauth_sukses_thread(self, api_key: str, nama: str):
-        print("[DEBUG] _on_oauth_sukses_thread called, api_key=" + api_key[:16] + "...")
+        logger.debug("_on_oauth_sukses_thread called, api_key=%s...", api_key[:16])
         self._on_oauth_sukses(api_key, nama)
 
     @Slot(str)
@@ -202,7 +205,7 @@ class LoginScreen(QWidget):
         # Ambil token dari config yang baru disimpan
         config = load_config_lokal()
         token = config.get("jwt_token", "oauth_done")
-        print(f"[DEBUG] emitting login_berhasil with token: {token[:10]}...")
+        logger.debug("emitting login_berhasil with token: %s...", token[:10])
         self.login_berhasil.emit(token)
 
     def _on_oauth_error(self, msg: str):
@@ -317,7 +320,7 @@ class AdminWindow(QMainWindow):
             QTimer.singleShot(1000, lambda: self.setWindowFlags(self.windowFlags() & ~Qt.WindowStaysOnTopHint))
             QTimer.singleShot(1100, self.show) 
             
-            print("[DEBUG] done")
+            logger.debug("done")
         except Exception as e:
             import traceback
             traceback.print_exc()
@@ -579,33 +582,37 @@ class AdminWindow(QMainWindow):
             self.lbl_status.setText("⏳ Mengirim data wajah ke server...")
             payload = {
                 "embedding": hasil.embedding.tolist(),
-                "model_version": "minifasnet-v1",
+                "model_version": engine.model_version,
             }
-            print(f"[DEBUG] Enroll payload: {len(payload['embedding'])} dim, model={payload['model_version']}")
+            logger.debug("Enroll payload: %d dim, model=%s", len(payload["embedding"]), payload["model_version"])
             resp_enroll = requests.post(
                 f"{self.server_url}/siswa/{siswa_id}/enroll", headers=headers,
-                json=payload,
-                timeout=30,
+                json=payload, timeout=30,
             )
-            print(f"[DEBUG] Enroll response: {resp_enroll.status_code} {resp_enroll.text[:200]}")
+            logger.debug("Enroll response: %s %s", resp_enroll.status_code, resp_enroll.text[:200])
             resp_enroll.raise_for_status()
 
         except requests.RequestException as e:
             err_msg = str(e)
             if e.response is not None:
                 err_msg = f"{e.response.status_code} {e.response.reason}: {e.response.text[:300]}"
-            print(f"[DEBUG] enrollment server error: {err_msg}")
-            # Tetap simpan lokal meski server gagal
-            self.lbl_status.setText(f"⚠️ Server gagal, disimpan lokal saja: {err_msg}")
-            QMessageBox.warning(self, "Peringatan", f"Enrollment gagal ke server.\n\n{err_msg}\n\nData disimpan lokal saja.")
+            logger.warning("Enrollment gagal ke server: %s", err_msg)
+            self.lbl_status.setText(f"❌ Enrollment gagal: {err_msg}")
+            QMessageBox.critical(
+                self, "Enrollment Gagal",
+                f"Tidak bisa mendaftarkan siswa ke server.\n\n{err_msg}\n\n"
+                "Enrollment butuh koneksi ke server (ID siswa berasal dari "
+                "server). Coba lagi setelah koneksi tersedia.",
+            )
+            return   # <-- KUNCI PERBAIKAN: hentikan di sini, jangan lanjut
 
-        # 3. Baru cache ke lokal (selalu, bahkan bila server gagal)
+        # Titik ini HANYA tercapai kalau proses ke server berhasil penuh
         repo.upsert_siswa(siswa_id, nis, nama, kelas)
         enc = encrypt_embedding(hasil.embedding, face_encryption_key)
         repo.upsert_embedding(siswa_id, enc, engine.model_version, datetime.now().isoformat())
 
         self.lbl_status.setText(f"✅ {nama} berhasil di-enroll!")
-        QMessageBox.information(self, "Berhasil", f"Siswa {nama} berhasil di-enroll.")
+        QMessageBox.information(self, "Berhasil", f"Siswa {nama} berhasil di-enroll ke server.")
 
     def _build_data_ui(self, parent: QWidget, repo: AbsensiRepository):
         layout = QVBoxLayout(parent)

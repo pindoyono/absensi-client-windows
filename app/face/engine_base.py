@@ -35,10 +35,15 @@ class FaceEngine(ABC):
     ini, tidak tahu model konkretnya."""
 
     @abstractmethod
-    def proses_frame(self, frame_bgr: np.ndarray) -> HasilDeteksi:
+    def proses_frame(self, frame_bgr: np.ndarray, skip_liveness: bool = False) -> HasilDeteksi:
         """Input: 1 frame kamera (BGR, format OpenCV standar).
         Output: HasilDeteksi — kalau wajah_terdeteksi=False atau
-        lolos_liveness=False, embedding harus None."""
+        lolos_liveness=False, embedding harus None.
+        
+        skip_liveness: True untuk kondisi terkontrol/diawasi admin (mis.
+        proses enrollment) di mana anti-spoofing tidak relevan — device
+        kiosk untuk absensi harian TIDAK BOLEH pernah memakai True.
+        """
         ...
 
     @abstractmethod

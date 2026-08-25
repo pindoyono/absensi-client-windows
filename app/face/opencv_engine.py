@@ -27,7 +27,9 @@ class OpenCVPlaceholderEngine(FaceEngine):
         if self._detector.empty():
             raise RuntimeError(f"Gagal load Haar Cascade dari {_CASCADE_PATH}")
 
-    def proses_frame(self, frame_bgr: np.ndarray) -> HasilDeteksi:
+    def proses_frame(self, frame_bgr: np.ndarray, skip_liveness: bool = False) -> HasilDeteksi:
+        # skip_liveness tidak berpengaruh di sini — placeholder ini memang
+        # tidak pernah punya liveness check sungguhan (selalu lolos)
         gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
         faces = self._detector.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(80, 80))
 
