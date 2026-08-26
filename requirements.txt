@@ -6,6 +6,8 @@ sqlcipher3-binary==0.5.3
 cryptography==43.0.1
 python-dotenv==1.0.1
 numpy>=2.0.2
+PyJWT>=2.8.0
+keyring>=24.0.0
 
 # testing
 pytest==8.3.3
