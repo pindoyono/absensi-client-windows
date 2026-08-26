@@ -79,3 +79,62 @@ CREATE TABLE IF NOT EXISTS dispensasi_cache (
     alasan TEXT,
     PRIMARY KEY (siswa_id, tanggal, jenis)
 );
+
+-- ============================================================
+-- OPS-001: Audit Log Table — track semua actions untuk compliance
+-- ============================================================
+CREATE TABLE IF NOT EXISTS device_audit_log (
+    log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,  -- ISO 8601 format
+    event_type TEXT NOT NULL,  -- LOGIN, LOGOUT, ENROLLMENT, SYNC_START, SYNC_COMPLETE, SYNC_FAIL, ATTENDANCE_RECORD, CONFIG_CHANGE, ERROR
+    actor TEXT,  -- email (untuk OAuth) atau 'system'
+    action TEXT NOT NULL,  -- deskripsi action
+    details TEXT,  -- JSON string dengan extra details
+    status TEXT NOT NULL,  -- 'success', 'failed'
+    error_message TEXT,  -- jika ada error
+    device_id TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON device_audit_log(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_event_type ON device_audit_log(event_type);
+
+-- ============================================================
+-- LIVENESS-004: Liveness Log Table — track setiap liveness check
+-- ============================================================
+CREATE TABLE IF NOT EXISTS liveness_log (
+    log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,  -- ISO 8601 format
+    frame_id TEXT,  -- unique frame identifier (untuk debugging)
+    wajah_terdeteksi INTEGER NOT NULL,  -- 0 atau 1
+    is_real INTEGER,  -- 0=fake, 1=real (NULL jika wajah tidak terdeteksi)
+    liveness_score REAL,  -- skor liveness dari model
+    ambang_saat_itu REAL NOT NULL,  -- AMBANG_LIVENESS yang dipakai saat itu
+    alasan_gagal TEXT,  -- error message jika ada
+    siswa_id INTEGER,  -- jika matching berhasil, NULL kalau gagal
+    device_id TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_liveness_timestamp ON liveness_log(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_liveness_wajah_terdeteksi ON liveness_log(wajah_terdeteksi);
+
+-- ============================================================
+-- OPS-002: Sync Event Log — track setiap sync cycle
+-- ============================================================
+CREATE TABLE IF NOT EXISTS sync_event_log (
+    log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,  -- waktu sync dimulai
+    duration_ms INTEGER,  -- durasi sync dalam milliseconds
+    status TEXT NOT NULL,  -- 'success', 'partial', 'failed'
+    batch_count INTEGER,  -- jumlah records di-sync
+    success_count INTEGER,  -- jumlah berhasil
+    duplicate_count INTEGER,  -- jumlah duplikat
+    fail_count INTEGER,  -- jumlah gagal
+    error_message TEXT,  -- error message jika ada
+    device_id TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_sync_event_timestamp ON sync_event_log(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_sync_event_status ON sync_event_log(status);
