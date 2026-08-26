@@ -255,6 +255,7 @@ class AdminWindow(QMainWindow):
         self.server_url = server_url
         self.device_id = device_id
         self.face_encryption_key = face_encryption_key
+        self.repo = repo
 
         # Cek apakah device sudah terdaftar & user sudah login (JWT valid)
         config = load_config_lokal()
@@ -382,12 +383,11 @@ class AdminWindow(QMainWindow):
         if is_admin:
             self.btn_nav_jadwal = QPushButton("📅 Pengaturan Jadwal")
             self.btn_nav_jadwal.clicked.connect(lambda: self.stack.setCurrentIndex(2))
+            self.btn_nav_jadwal.clicked.connect(self._load_jadwal_data)
             side_layout.addWidget(self.btn_nav_jadwal)
             self.jadwal_screen = QWidget()
             self._build_jadwal_ui(self.jadwal_screen, server_url)
             self.stack.addWidget(self.jadwal_screen)
-            self.btn_nav_jadwal.clicked.connect(lambda: self.stack.setCurrentIndex(2))
-            self.btn_nav_jadwal.clicked.connect(self._load_jadwal_data)
             idx += 1
 
             # 4. Pengaturan Guru — admin only
@@ -715,77 +715,114 @@ class AdminWindow(QMainWindow):
         layout.addWidget(btn_web)
 
     def _load_jadwal_data(self):
-        """Ambil data jadwal standar + override dari server via GET endpoint (background thread)."""
-        from app.api.client import ApiClient, KoneksiGagal, LayananJadwalBelumSiap
-        config = load_config_lokal()
-        jwt = config.get("jwt_token", "")
-        if not jwt:
-            self.label_jadwal_status.setText("⚠️ Belum login — tidak bisa mengambil data jadwal.")
-            self.label_jadwal_status.setStyleSheet(f"font-size: 12px; color: {WARNA['warning_teks']};")
-            return
+        """Muat data jadwal dari cache SQLite lokal + refresh dari server (background thread)."""
+        import logging
+        _log = logging.getLogger(__name__)
 
         self.btn_refresh_jadwal.setEnabled(False)
         self.btn_refresh_jadwal.setText("⏳ Memuat...")
-        self.label_jadwal_status.setText("Mengambil data dari server...")
+        self.label_jadwal_status.setText("Membaca jadwal dari cache lokal...")
         self.label_jadwal_status.setStyleSheet(f"font-size: 12px; color: {WARNA['teks_sekunder']};")
-
-        api = ApiClient(
-            base_url=self.server_url, device_id=self.device_id,
-            api_key=config.get("api_key", ""), service_jwt=jwt,
-        )
 
         def _fetch():
             standar = []
             override = []
-            err = None
-            try:
-                standar = api.get_jadwal_standar()
-            except Exception as e:
-                err = str(e)
-            try:
-                override = api.get_jadwal_override()
-            except Exception as e:
-                err = (err + "; " if err else "") + str(e)
-            return standar, override, err
 
-        def _on_result(standar, override, err):
-            if err and not standar:
-                self.label_jadwal_status.setText(f"⚠️ Gagal: {err}")
+            # 1. Baca dari cache SQLite lokal
+            try:
+                rows = self.repo.conn.execute(
+                    "SELECT kelas, tanggal, hari, jam_masuk, jam_pulang, sumber "
+                    "FROM jadwal_cache ORDER BY sumber, kelas"
+                ).fetchall()
+                for r in rows:
+                    entry = {
+                        "kelas": r["kelas"] or "Semua",
+                        "jam_masuk": r["jam_masuk"],
+                        "jam_pulang": r["jam_pulang"],
+                    }
+                    if r["sumber"] == "standar":
+                        entry["hari"] = r["hari"] or ""
+                        standar.append(entry)
+                    else:
+                        entry["tanggal"] = r["tanggal"] or ""
+                        override.append(entry)
+            except Exception as e:
+                _log.warning("Gagal baca jadwal_cache: %s", e)
+
+            # 2. Refresh dari server via /jadwal/efektif untuk semua kelas
+            err_server = None
+            try:
+                from app.api.client import ApiClient
+                config = load_config_lokal()
+                jwt = config.get("jwt_token", "")
+                if jwt:
+                    api = ApiClient(
+                        base_url=self.server_url, device_id=self.device_id,
+                        api_key=config.get("api_key", ""), service_jwt=jwt,
+                    )
+                    kelas_list = [r["kelas"] for r in self.repo.conn.execute(
+                        "SELECT DISTINCT kelas FROM siswa_cache ORDER BY kelas"
+                    ).fetchall()]
+                    refreshed = 0
+                    for kelas in kelas_list:
+                        try:
+                            data = api.tarik_jadwal_efektif(kelas)
+                            if data and data.get("jam_masuk"):
+                                refreshed += 1
+                        except Exception:
+                            pass  # skip kelas yang gagal
+                    _log.info("Refresh jadwal server: %d/%d kelas sukses", refreshed, len(kelas_list))
+            except Exception as e:
+                err_server = str(e)
+                _log.warning("Refresh jadwal dari server gagal: %s", e)
+
+            return standar, override, err_server
+
+        def _on_result(standar, override, err_server):
+            try:
+                # Isi tabel standar
+                self.table_jadwal_standar.setRowCount(len(standar))
+                for i, j in enumerate(standar):
+                    self.table_jadwal_standar.setItem(i, 0, QTableWidgetItem(str(j.get("hari", ""))))
+                    self.table_jadwal_standar.setItem(i, 1, QTableWidgetItem(str(j.get("kelas", "Semua"))))
+                    self.table_jadwal_standar.setItem(i, 2, QTableWidgetItem(str(j.get("jam_masuk", ""))))
+                    self.table_jadwal_standar.setItem(i, 3, QTableWidgetItem(str(j.get("jam_pulang", ""))))
+
+                # Isi tabel override
+                self.table_jadwal_override.setRowCount(len(override))
+                for i, j in enumerate(override):
+                    self.table_jadwal_override.setItem(i, 0, QTableWidgetItem(str(j.get("tanggal", ""))))
+                    self.table_jadwal_override.setItem(i, 1, QTableWidgetItem(str(j.get("kelas", "Semua"))))
+                    self.table_jadwal_override.setItem(i, 2, QTableWidgetItem(str(j.get("jam_masuk", "") or "—")))
+                    self.table_jadwal_override.setItem(i, 3, QTableWidgetItem(str(j.get("jam_pulang", "") or "—")))
+                    self.table_jadwal_override.setItem(i, 4, QTableWidgetItem(str(j.get("alasan", "") or "—")))
+
+                total = len(standar) + len(override)
+                if total == 0:
+                    msg = "📭 Belum ada data jadwal ter-cache. Klik refresh untuk tarik dari server."
+                    self.label_jadwal_status.setStyleSheet(f"font-size: 12px; color: {WARNA['warning_teks']};")
+                else:
+                    msg = f"✅ {len(standar)} jadwal standar, {len(override)} override"
+                    if err_server:
+                        msg += f" ⚠️ (refresh server: {err_server})"
+                    self.label_jadwal_status.setStyleSheet(f"font-size: 12px; color: {WARNA['sukses_teks']};")
+                self.label_jadwal_status.setText(msg)
+            except Exception as e:
+                _log.exception("Gagal update UI jadwal")
+                self.label_jadwal_status.setText(f"⚠️ Error UI: {e}")
                 self.label_jadwal_status.setStyleSheet(f"font-size: 12px; color: {WARNA['bahaya_teks']};")
+            finally:
                 self.btn_refresh_jadwal.setEnabled(True)
                 self.btn_refresh_jadwal.setText("🔄 Refresh")
-                return
-
-            # Isi tabel standar
-            self.table_jadwal_standar.setRowCount(len(standar))
-            for i, j in enumerate(standar):
-                self.table_jadwal_standar.setItem(i, 0, QTableWidgetItem(str(j.get("hari", ""))))
-                self.table_jadwal_standar.setItem(i, 1, QTableWidgetItem(str(j.get("kelas") or "Semua")))
-                self.table_jadwal_standar.setItem(i, 2, QTableWidgetItem(str(j.get("jam_masuk", ""))))
-                self.table_jadwal_standar.setItem(i, 3, QTableWidgetItem(str(j.get("jam_pulang", ""))))
-
-            # Isi tabel override
-            self.table_jadwal_override.setRowCount(len(override))
-            for i, j in enumerate(override):
-                self.table_jadwal_override.setItem(i, 0, QTableWidgetItem(str(j.get("tanggal", ""))))
-                self.table_jadwal_override.setItem(i, 1, QTableWidgetItem(str(j.get("kelas") or "Semua")))
-                self.table_jadwal_override.setItem(i, 2, QTableWidgetItem(str(j.get("jam_masuk") or "—")))
-                self.table_jadwal_override.setItem(i, 3, QTableWidgetItem(str(j.get("jam_pulang") or "—")))
-                self.table_jadwal_override.setItem(i, 4, QTableWidgetItem(str(j.get("alasan") or "—")))
-
-            msg = f"✅ {len(standar)} jadwal standar, {len(override)} override"
-            if err:
-                msg += f" (override gagal: {err})"
-            self.label_jadwal_status.setText(msg)
-            self.label_jadwal_status.setStyleSheet(f"font-size: 12px; color: {WARNA['sukses_teks']};")
-            self.btn_refresh_jadwal.setEnabled(True)
-            self.btn_refresh_jadwal.setText("🔄 Refresh")
 
         import threading
         def _run():
-            result = _fetch()
-            # Pastikan callback jalan di thread GUI
-            QTimer.singleShot(0, lambda: _on_result(*result))
+            try:
+                result = _fetch()
+                QTimer.singleShot(0, lambda: _on_result(*result))
+            except Exception as e:
+                _log.exception("Thread jadwal crash total")
+                QTimer.singleShot(0, lambda: _on_result([], [], str(e)))
 
         threading.Thread(target=_run, daemon=True).start()
 

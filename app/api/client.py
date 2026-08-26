@@ -155,36 +155,9 @@ class ApiClient:
             raise KoneksiGagal(str(e)) from e
         return resp.json()
 
-    # ---------- Jadwal CRUD (via JWT guru) ----------
+    # ---------- Jadwal (via JWT guru) ----------
 
     def _headers_jwt(self) -> dict:
         if not self.service_jwt:
             raise LayananJadwalBelumSiap("GURU_SERVICE_JWT belum dikonfigurasi")
         return {"Authorization": f"Bearer {self.service_jwt}"}
-
-    def get_jadwal_standar(self) -> list[dict]:
-        """GET /jadwal/standar — ambil semua jadwal standar (jam masuk/pulang per hari)."""
-        try:
-            resp = requests.get(
-                f"{self.base_url}/jadwal/standar",
-                headers=self._headers_jwt(), timeout=self.timeout,
-            )
-            resp.raise_for_status()
-        except requests.RequestException as e:
-            raise KoneksiGagal(str(e)) from e
-        return resp.json()
-
-    def get_jadwal_override(self, dari_tanggal: str | None = None) -> list[dict]:
-        """GET /jadwal/override — ambil semua override jadwal (perubahan tanggal tertentu)."""
-        params = {}
-        if dari_tanggal:
-            params["dari_tanggal"] = dari_tanggal
-        try:
-            resp = requests.get(
-                f"{self.base_url}/jadwal/override",
-                headers=self._headers_jwt(), params=params, timeout=self.timeout,
-            )
-            resp.raise_for_status()
-        except requests.RequestException as e:
-            raise KoneksiGagal(str(e)) from e
-        return resp.json()
