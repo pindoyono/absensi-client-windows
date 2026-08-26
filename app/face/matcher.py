@@ -27,7 +27,7 @@ class HasilMatching:
 # NILAI INI HARUS DIKALIBRASI ULANG saat FaceEngine diganti dari
 # placeholder ke MiniFASNet — ambang batas sangat tergantung skala/
 # distribusi embedding model yang dipakai, tidak bisa dipakai lintas model.
-AMBANG_BATAS_JARAK = 0.1623
+AMBANG_BATAS_JARAK = 0.4083
 
 
 def cari_siswa_cocok(

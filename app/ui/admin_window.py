@@ -251,6 +251,11 @@ class AdminWindow(QMainWindow):
         self.resize(1000, 650)
         self.setStyleSheet(STYLESHEET_ADMIN)
 
+        # Simpan atribut instance untuk dipakai di seluruh method
+        self.server_url = server_url
+        self.device_id = device_id
+        self.face_encryption_key = face_encryption_key
+
         # Cek apakah device sudah terdaftar & user sudah login (JWT valid)
         config = load_config_lokal()
         sudah_terdaftar = (
@@ -381,6 +386,8 @@ class AdminWindow(QMainWindow):
             self.jadwal_screen = QWidget()
             self._build_jadwal_ui(self.jadwal_screen, server_url)
             self.stack.addWidget(self.jadwal_screen)
+            self.btn_nav_jadwal.clicked.connect(lambda: self.stack.setCurrentIndex(2))
+            self.btn_nav_jadwal.clicked.connect(self._load_jadwal_data)
             idx += 1
 
             # 4. Pengaturan Guru — admin only
@@ -650,19 +657,137 @@ class AdminWindow(QMainWindow):
     def _build_jadwal_ui(self, parent: QWidget, server_url: str):
         layout = QVBoxLayout(parent)
         layout.setContentsMargins(32, 24, 32, 24)
+
+        # Header baris
+        header_row = QHBoxLayout()
         judul = QLabel("📅 Pengaturan Jadwal Sekolah")
         judul.setStyleSheet("font-size: 20px; font-weight: 600;")
-        layout.addWidget(judul)
-        
-        info = QLabel("Fitur ini memungkinkan admin mengatur jam masuk, jam pulang, dan hari libur.")
-        info.setWordWrap(True)
-        layout.addWidget(info)
-        
-        # Placeholder for actual implementation
+        header_row.addWidget(judul)
+        header_row.addStretch()
+
+        self.btn_refresh_jadwal = QPushButton("🔄 Refresh")
+        self.btn_refresh_jadwal.setObjectName("btnPrimary")
+        self.btn_refresh_jadwal.clicked.connect(self._load_jadwal_data)
+        header_row.addWidget(self.btn_refresh_jadwal)
+        layout.addLayout(header_row)
+
+        # Status label
+        self.label_jadwal_status = QLabel("")
+        self.label_jadwal_status.setStyleSheet(f"font-size: 12px; color: {WARNA['teks_sekunder']};")
+        layout.addWidget(self.label_jadwal_status)
+        layout.addSpacing(8)
+
+        # --- Tabel Jadwal Standar ---
+        lbl_standar = QLabel("📋 Jadwal Standar (per Hari)")
+        lbl_standar.setStyleSheet("font-size: 15px; font-weight: 600; padding-bottom: 4px;")
+        layout.addWidget(lbl_standar)
+
+        self.table_jadwal_standar = QTableWidget()
+        self.table_jadwal_standar.setColumnCount(4)
+        self.table_jadwal_standar.setHorizontalHeaderLabels(["Hari", "Kelas", "Jam Masuk", "Jam Pulang"])
+        self.table_jadwal_standar.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table_jadwal_standar.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table_jadwal_standar.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table_jadwal_standar.setMinimumHeight(200)
+        layout.addWidget(self.table_jadwal_standar)
+
+        layout.addSpacing(16)
+
+        # --- Tabel Jadwal Override ---
+        lbl_override = QLabel("🔧 Override Jadwal (Perubahan Tanggal Tertentu)")
+        lbl_override.setStyleSheet("font-size: 15px; font-weight: 600; padding-bottom: 4px;")
+        layout.addWidget(lbl_override)
+
+        self.table_jadwal_override = QTableWidget()
+        self.table_jadwal_override.setColumnCount(5)
+        self.table_jadwal_override.setHorizontalHeaderLabels(["Tanggal", "Kelas", "Jam Masuk", "Jam Pulang", "Alasan"])
+        self.table_jadwal_override.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table_jadwal_override.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table_jadwal_override.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table_jadwal_override.setMinimumHeight(200)
+        layout.addWidget(self.table_jadwal_override)
+
         layout.addStretch()
+
+        # Link ke web dashboard
         btn_web = QPushButton("🌐 Buka Dashboard Web untuk Pengaturan Lengkap")
         btn_web.clicked.connect(lambda: webbrowser.open(f"{server_url}/dashboard/jadwal"))
         layout.addWidget(btn_web)
+
+    def _load_jadwal_data(self):
+        """Ambil data jadwal standar + override dari server via GET endpoint (background thread)."""
+        from app.api.client import ApiClient, KoneksiGagal, LayananJadwalBelumSiap
+        config = load_config_lokal()
+        jwt = config.get("jwt_token", "")
+        if not jwt:
+            self.label_jadwal_status.setText("⚠️ Belum login — tidak bisa mengambil data jadwal.")
+            self.label_jadwal_status.setStyleSheet(f"font-size: 12px; color: {WARNA['warning_teks']};")
+            return
+
+        self.btn_refresh_jadwal.setEnabled(False)
+        self.btn_refresh_jadwal.setText("⏳ Memuat...")
+        self.label_jadwal_status.setText("Mengambil data dari server...")
+        self.label_jadwal_status.setStyleSheet(f"font-size: 12px; color: {WARNA['teks_sekunder']};")
+
+        api = ApiClient(
+            base_url=self.server_url, device_id=self.device_id,
+            api_key=config.get("api_key", ""), service_jwt=jwt,
+        )
+
+        def _fetch():
+            standar = []
+            override = []
+            err = None
+            try:
+                standar = api.get_jadwal_standar()
+            except Exception as e:
+                err = str(e)
+            try:
+                override = api.get_jadwal_override()
+            except Exception as e:
+                err = (err + "; " if err else "") + str(e)
+            return standar, override, err
+
+        def _on_result(standar, override, err):
+            if err and not standar:
+                self.label_jadwal_status.setText(f"⚠️ Gagal: {err}")
+                self.label_jadwal_status.setStyleSheet(f"font-size: 12px; color: {WARNA['bahaya_teks']};")
+                self.btn_refresh_jadwal.setEnabled(True)
+                self.btn_refresh_jadwal.setText("🔄 Refresh")
+                return
+
+            # Isi tabel standar
+            self.table_jadwal_standar.setRowCount(len(standar))
+            for i, j in enumerate(standar):
+                self.table_jadwal_standar.setItem(i, 0, QTableWidgetItem(str(j.get("hari", ""))))
+                self.table_jadwal_standar.setItem(i, 1, QTableWidgetItem(str(j.get("kelas") or "Semua")))
+                self.table_jadwal_standar.setItem(i, 2, QTableWidgetItem(str(j.get("jam_masuk", ""))))
+                self.table_jadwal_standar.setItem(i, 3, QTableWidgetItem(str(j.get("jam_pulang", ""))))
+
+            # Isi tabel override
+            self.table_jadwal_override.setRowCount(len(override))
+            for i, j in enumerate(override):
+                self.table_jadwal_override.setItem(i, 0, QTableWidgetItem(str(j.get("tanggal", ""))))
+                self.table_jadwal_override.setItem(i, 1, QTableWidgetItem(str(j.get("kelas") or "Semua")))
+                self.table_jadwal_override.setItem(i, 2, QTableWidgetItem(str(j.get("jam_masuk") or "—")))
+                self.table_jadwal_override.setItem(i, 3, QTableWidgetItem(str(j.get("jam_pulang") or "—")))
+                self.table_jadwal_override.setItem(i, 4, QTableWidgetItem(str(j.get("alasan") or "—")))
+
+            msg = f"✅ {len(standar)} jadwal standar, {len(override)} override"
+            if err:
+                msg += f" (override gagal: {err})"
+            self.label_jadwal_status.setText(msg)
+            self.label_jadwal_status.setStyleSheet(f"font-size: 12px; color: {WARNA['sukses_teks']};")
+            self.btn_refresh_jadwal.setEnabled(True)
+            self.btn_refresh_jadwal.setText("🔄 Refresh")
+
+        import threading
+        def _run():
+            result = _fetch()
+            # Pastikan callback jalan di thread GUI
+            QTimer.singleShot(0, lambda: _on_result(*result))
+
+        threading.Thread(target=_run, daemon=True).start()
 
     def _build_guru_ui(self, parent: QWidget, server_url: str):
         layout = QVBoxLayout(parent)

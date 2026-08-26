@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, date as date_cls
 
 from app.api.client import ApiClient, KoneksiGagal, LayananJadwalBelumSiap
 from app.database.repository import AbsensiRepository
@@ -23,6 +23,7 @@ class RingkasanSiklus:
     gagal: int = 0
     embedding_diperbarui: int = 0
     jadwal_diperbarui: int = 0
+    dispensasi_diperbarui: int = 0
     pesan_error: str | None = None
 
 
@@ -99,5 +100,16 @@ class SyncService:
             logger.info("Jadwal tidak di-refresh: %s", e)
         except KoneksiGagal as e:
             ringkasan.pesan_error = (ringkasan.pesan_error or "") + f" | Koneksi terputus saat tarik jadwal: {e}"
+
+        # --- Tarik dispensasi aktif hari ini ---
+        try:
+            hari_ini = date_cls.today().isoformat()
+            entries = self.api.tarik_dispensasi_hari_ini(hari_ini)
+            self.repo.replace_dispensasi_cache(hari_ini, entries)
+            ringkasan.dispensasi_diperbarui = len(entries)
+        except LayananJadwalBelumSiap as e:
+            logger.info("Dispensasi tidak di-refresh: %s", e)
+        except KoneksiGagal as e:
+            ringkasan.pesan_error = (ringkasan.pesan_error or "") + f" | Koneksi terputus saat tarik dispensasi: {e}"
 
         return ringkasan

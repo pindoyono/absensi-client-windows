@@ -12,13 +12,11 @@ from app.face.engine_base import FaceEngine, HasilDeteksi
 # adalah titik awal yang wajar, BUKAN hasil kalibrasi sungguhan.
 AMBANG_LIVENESS = 0.7
 
-# Indeks kelas "wajah asli" pada output model. Berdasarkan dokumentasi
-# model open-source (minivision-ai/Silent-Face-Anti-Spoofing) urutan
-# kelasnya [live, print-attack, replay-attack] -> live di indeks 0.
-# WAJIB DIVERIFIKASI dengan Skenario 5 & 6 di prompt pengujian webcam:
-# todongkan FOTO ke kamera — kalau masih lolos sebagai "asli", coba
-# ubah nilai ini ke 1 atau 2 dan test ulang.
-INDEKS_KELAS_LIVE = 0
+# Indeks kelas "wajah asli" pada output model.
+# Hasil verifikasi webcam fisik di proyek ini menunjukkan kelas "live"
+# berada di indeks 2 untuk model yang dipakai saat ini.
+# Jika model diganti, lakukan verifikasi ulang Skenario 5 & 6.
+INDEKS_KELAS_LIVE = 2
 
 
 def evaluasi_liveness(
@@ -141,4 +139,4 @@ class MiniFASNetEngine(FaceEngine):
 
     @property
     def model_version(self) -> str:
-        return "minifasnet+arcface-v1"
+        return "minifasnet-v1"

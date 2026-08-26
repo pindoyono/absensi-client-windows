@@ -64,7 +64,7 @@ def main() -> int:
         jam_masuk_standar=dtime(7, 0), jam_pulang_standar=dtime(15, 0),
         gunakan_kamera=True,
     )
-    window.resize(500, 640)
+    window.resize(1024, 768)
     
     # Cek konektivitas sebelum window ditampilkan
     window.set_status_online(api.cek_koneksi())

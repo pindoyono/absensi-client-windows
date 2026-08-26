@@ -201,3 +201,24 @@ class AbsensiRepository:
             (kunci, nilai),
         )
         self.conn.commit()
+
+    # ---------- Dispensasi cache ----------
+    def replace_dispensasi_cache(self, tanggal: str, entries: list[dict]) -> None:
+        """Hapus semua entri dispensasi untuk tanggal tertentu, lalu masukkan yang baru.
+        entries berisi dict dengan kunci: siswa_id, tanggal, jenis, kategori, alasan.
+        """
+        self.conn.execute("DELETE FROM dispensasi_cache WHERE tanggal = ?", (tanggal,))
+        for e in entries:
+            self.conn.execute(
+                "INSERT INTO dispensasi_cache (siswa_id, tanggal, jenis, kategori, alasan) VALUES (?, ?, ?, ?, ?)",
+                (e["siswa_id"], e["tanggal"], e["jenis"], e.get("kategori"), e.get("alasan")),
+            )
+        self.conn.commit()
+
+    def punya_dispensasi_aktif(self, siswa_id: int, tanggal: str, jenis: str = "PULANG_CEPAT") -> Optional[sqlite3.Row]:
+        """Kembalikan baris dispensasi jika ada untuk siswa, tanggal, dan jenis.
+        """
+        return self.conn.execute(
+            "SELECT * FROM dispensasi_cache WHERE siswa_id = ? AND tanggal = ? AND jenis = ?",
+            (siswa_id, tanggal, jenis),
+        ).fetchone()

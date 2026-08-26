@@ -12,7 +12,7 @@ pytestmark = pytest.mark.skipif(
 def test_model_termuat():
     from app.face.minifasnet_engine import MiniFASNetEngine
     engine = MiniFASNetEngine(PATH_MODEL)
-    assert engine.model_version == "minifasnet+arcface-v1"
+    assert engine.model_version == "minifasnet-v1"
 
 
 # --- Test evaluasi_liveness: fungsi MURNI, tidak butuh model asli sama

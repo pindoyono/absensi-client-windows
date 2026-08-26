@@ -70,3 +70,13 @@ def test_set_status_online_offline(repo, qtbot):
 
     window.set_status_online(True)
     assert "Online" in window.label_status_jaringan.text()
+
+
+def test_tampilkan_hasil_spoofing(repo, qtbot):
+    window = _buat_window(repo, qtbot)
+
+    window._tampilkan_hasil_spoofing("Terdeteksi spoofing (skor: 0.12)")
+
+    assert window.label_hasil.text() == "Akses ditolak"
+    assert "foto/video" in window.label_status_detail.text().lower()
+    assert window.kartu_status.isVisible() is True

@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS siswa_cache (
 
 -- Cache embedding wajah (terenkripsi, ditarik dari server)
 CREATE TABLE IF NOT EXISTS embedding_cache (
-    siswa_id INTEGER PRIMARY KEY REFERENCES siswa_cache(siswa_id),
+    siswa_id INTEGER PRIMARY KEY REFERENCES siswa_cache (siswa_id),
     embedding_encrypted BLOB NOT NULL,
     model_version TEXT NOT NULL,
     diperbarui_pada TEXT NOT NULL
@@ -24,17 +24,18 @@ CREATE TABLE IF NOT EXISTS embedding_cache (
 
 -- Cache jadwal efektif per kelas (ditarik dari server secara berkala)
 CREATE TABLE IF NOT EXISTS jadwal_cache (
-    kelas TEXT,                      -- NULL = berlaku semua kelas
-    tanggal TEXT,                    -- diisi kalau sumbernya override; NULL kalau standar
-    hari TEXT,                       -- diisi kalau sumbernya standar; NULL kalau override
+    kelas TEXT, -- NULL = berlaku semua kelas
+    tanggal TEXT, -- diisi kalau sumbernya override; NULL kalau standar
+    hari TEXT, -- diisi kalau sumbernya standar; NULL kalau override
     jam_masuk TEXT NOT NULL,
     jam_pulang TEXT NOT NULL,
-    sumber TEXT NOT NULL,            -- 'standar' | 'override'
+    sumber TEXT NOT NULL, -- 'standar' | 'override'
     ditarik_pada TEXT NOT NULL
 );
 
 -- Absensi yang tercatat DI DEVICE INI — ini yang jadi antrian sync.
 -- record_id dibuat di client (UUID), inilah idempotency key ke server.
+
 CREATE TABLE IF NOT EXISTS absensi_lokal (
     record_id TEXT PRIMARY KEY,
     siswa_id INTEGER NOT NULL,
@@ -50,17 +51,16 @@ CREATE TABLE IF NOT EXISTS absensi_lokal (
     percobaan_sync INTEGER NOT NULL DEFAULT 0,
     dibuat_pada TEXT NOT NULL,
 
-    -- Jaring pengaman LOKAL — cermin dari constraint server. Ini yang
-    -- membuat validasi "sudah absen atau belum" bisa dicek instan dari
-    -- SQLite tanpa perlu tanya server dulu (lihat app/business/attendance_logic.py)
-    UNIQUE (siswa_id, tanggal, type)
-);
+-- Jaring pengaman LOKAL — cermin dari constraint server. Ini yang
+-- membuat validasi "sudah absen atau belum" bisa dicek instan dari
+-- SQLite tanpa perlu tanya server dulu (lihat app/business/attendance_logic.py)
+UNIQUE (siswa_id, tanggal, type) );
 
-CREATE INDEX IF NOT EXISTS idx_absensi_lokal_belum_sync
-    ON absensi_lokal(synced) WHERE synced = 0;
+CREATE INDEX IF NOT EXISTS idx_absensi_lokal_belum_sync ON absensi_lokal (synced)
+WHERE
+    synced = 0;
 
-CREATE INDEX IF NOT EXISTS idx_absensi_lokal_siswa_tanggal
-    ON absensi_lokal(siswa_id, tanggal);
+CREATE INDEX IF NOT EXISTS idx_absensi_lokal_siswa_tanggal ON absensi_lokal (siswa_id, tanggal);
 
 -- Metadata sync — dipakai untuk parameter `diperbarui_sejak` saat
 -- menarik ulang embedding/jadwal, supaya tidak transfer ulang semua
@@ -68,4 +68,14 @@ CREATE INDEX IF NOT EXISTS idx_absensi_lokal_siswa_tanggal
 CREATE TABLE IF NOT EXISTS sync_metadata (
     kunci TEXT PRIMARY KEY,
     nilai TEXT
+);
+
+-- Cache dispensasi aktif (ditarik dari server per tanggal)
+CREATE TABLE IF NOT EXISTS dispensasi_cache (
+    siswa_id INTEGER NOT NULL,
+    tanggal TEXT NOT NULL,
+    jenis TEXT NOT NULL,
+    kategori TEXT,
+    alasan TEXT,
+    PRIMARY KEY (siswa_id, tanggal, jenis)
 );

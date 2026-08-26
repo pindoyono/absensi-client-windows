@@ -7,17 +7,21 @@ akan divalidasi server saat sync.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, date, time
+from datetime import datetime, date, time, timedelta
 from enum import Enum
 from typing import Optional
 
 from app.database.repository import AbsensiRepository, RekamanAbsensi
 
 
+BATAS_AWAL_MASUK_JAM = 2
+
 class HasilAbsen(Enum):
     BERHASIL_MASUK = "berhasil_masuk"
     BERHASIL_PULANG = "berhasil_pulang"
     DITOLAK_SUDAH_ABSEN = "ditolak_sudah_absen"
+    DITOLAK_BELUM_WAKTUNYA_MASUK = "ditolak_belum_waktunya_masuk"
+    DITOLAK_BELUM_WAKTUNYA_PULANG = "ditolak_belum_waktunya_pulang"
 
 
 @dataclass
@@ -83,6 +87,31 @@ def proses_absen(
 
     type_ = "MASUK" if status == "BELUM_ABSEN" else "PULANG"
 
+    # --- validasi jendela waktu ---
+    if type_ == "MASUK":
+        earliest = datetime.combine(sekarang.date(), jam_masuk_standar) - timedelta(hours=BATAS_AWAL_MASUK_JAM)
+        if sekarang < earliest:
+            return KeputusanAbsen(
+                hasil=HasilAbsen.DITOLAK_BELUM_WAKTUNYA_MASUK,
+                pesan=f"Belum waktunya absen masuk (mulai {earliest.strftime('%H:%M')})",
+            )
+
+    if type_ == "PULANG" and sekarang.time() < jam_pulang_standar:
+        dispensasi = repo.punya_dispensasi_aktif(siswa_id, tanggal, "PULANG_CEPAT")
+        if not dispensasi:
+            return KeputusanAbsen(
+                hasil=HasilAbsen.DITOLAK_BELUM_WAKTUNYA_PULANG,
+                pesan=f"Belum waktunya pulang (mulai {jam_pulang_standar.strftime('%H:%M')})",
+            )
+        # Ada dispensasi -> lanjut simpan dengan kategori dari dispensasi
+        status_otomatis = dispensasi["kategori"] or "IZIN"
+        rekaman = repo.simpan_absensi(
+            siswa_id=siswa_id, type_=type_, status_kehadiran_otomatis=status_otomatis,
+            device_id=device_id, catatan=dispensasi["alasan"], tanggal=tanggal, jam_aktual=sekarang,
+        )
+        return KeputusanAbsen(hasil=HasilAbsen.BERHASIL_PULANG, rekaman=rekaman, pesan=f"Pulang dengan izin: {status_otomatis}")
+
+    # --- alur normal ---
     status_otomatis = _hitung_status_otomatis(
         sekarang, type_, jam_masuk_standar, jam_pulang_standar, toleransi_menit,
     )

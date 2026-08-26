@@ -90,20 +90,10 @@ class KioskWindow(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        kartu = QFrame(objectName="kartu")
-        kartu.setStyleSheet(
-            f"#kartu {{ background-color: {WARNA['surface']}; border-radius: 12px; "
-            f"border: 1px solid {WARNA['border']}; }}"
-        )
-        kartu.setFixedWidth(420)
-        kartu_layout = QVBoxLayout(kartu)
-        kartu_layout.setContentsMargins(0, 0, 0, 0)
-        kartu_layout.setSpacing(0)
-
-        # Header: status jaringan + tombol admin/login + jam
+        # Header: status jaringan + jam di kiri, tombol login di kanan
         header = QHBoxLayout()
-        header.setContentsMargins(16, 12, 16, 12)
-        header.setSpacing(10)
+        header.setContentsMargins(24, 16, 24, 0)
+        header.setSpacing(16)
 
         self.label_status_jaringan = QLabel("● Online · tersinkron")
         self.label_status_jaringan.setStyleSheet(f"color: {WARNA['sukses_teks']}; font-size: 13px;")
@@ -111,6 +101,10 @@ class KioskWindow(QWidget):
         self.label_jam = QLabel("--:--")
         self.label_jam.setObjectName("jamTampilan")
         self.label_jam.setStyleSheet(f"color: {WARNA['teks_utama']}; font-size: 13px; font-weight: 600;")
+
+        header.addWidget(self.label_status_jaringan)
+        header.addStretch()
+        header.addWidget(self.label_jam)
 
         # Container untuk login/logout tombol + username label
         self.header_right = QHBoxLayout()
@@ -133,57 +127,63 @@ class KioskWindow(QWidget):
         self.header_right.addWidget(self.lbl_user)
         self.header_right.addWidget(self.btn_admin)
 
-        header.addWidget(self.label_status_jaringan)
-        header.addStretch()
         header.addLayout(self.header_right)
-        header.addWidget(self.label_jam)
-        kartu_layout.addLayout(header)
+        layout.addLayout(header)
 
-        garis = QFrame()
-        garis.setFixedHeight(1)
-        garis.setStyleSheet(f"background-color: {WARNA['border']};")
-        kartu_layout.addWidget(garis)
+        # Kartu utama di tengah
+        kartu = QFrame(objectName="kartu")
+        kartu.setStyleSheet(
+            f"#kartu {{ background-color: {WARNA['surface']}; border-radius: 12px; "
+            f"border: 1px solid {WARNA['border']}; }}"
+        )
+        kartu.setMinimumWidth(550)
+        kartu_layout = QVBoxLayout(kartu)
+        kartu_layout.setContentsMargins(0, 0, 0, 0)
+        kartu_layout.setSpacing(0)
 
         # -- Body: foto + status --
         body = QVBoxLayout()
-        body.setContentsMargins(20, 28, 20, 20)
+        body.setContentsMargins(20, 20, 20, 16)
         body.setAlignment(Qt.AlignHCenter)
 
         self.label_foto = QLabel()
-        self.label_foto.setFixedSize(160, 160)
+        self.label_foto.setFixedSize(420, 420)
         self.label_foto.setAlignment(Qt.AlignCenter)
         self.label_foto.setStyleSheet(
             f"background-color: {WARNA['surface_2']}; border-radius: 12px; "
             f"border: 2px solid {WARNA['border']};"
         )
         self.label_foto.setText("👤")
-        self.label_foto.setStyleSheet(self.label_foto.styleSheet() + "font-size: 56px;")
+        self.label_foto.setStyleSheet(self.label_foto.styleSheet() + "font-size: 96px;")
         body.addWidget(self.label_foto, alignment=Qt.AlignHCenter)
-        body.addSpacing(20)
+        body.addSpacing(16)
 
         self.label_hasil = QLabel("Arahkan wajah ke kamera")
         self.label_hasil.setAlignment(Qt.AlignHCenter)
-        self.label_hasil.setStyleSheet(f"font-size: 15px; color: {WARNA['teks_sekunder']};")
+        self.label_hasil.setStyleSheet(f"font-size: 18px; color: {WARNA['teks_sekunder']};")
         body.addWidget(self.label_hasil)
 
         self.label_nama = QLabel("")
         self.label_nama.setObjectName("namaSiswa")
         self.label_nama.setAlignment(Qt.AlignHCenter)
+        self.label_nama.setStyleSheet("font-size: 28px; font-weight: 600;")
         body.addWidget(self.label_nama)
 
         self.label_kelas = QLabel("")
         self.label_kelas.setObjectName("kelasSiswa")
         self.label_kelas.setAlignment(Qt.AlignHCenter)
+        self.label_kelas.setStyleSheet("font-size: 16px;")
         body.addWidget(self.label_kelas)
 
-        body.addSpacing(16)
+        body.addSpacing(12)
 
         self.kartu_status = QFrame()
-        self.kartu_status.setFixedWidth(380)
+        self.kartu_status.setMinimumWidth(420)
         status_layout = QHBoxLayout(self.kartu_status)
         status_layout.setAlignment(Qt.AlignCenter)
         self.label_status_detail = QLabel("")
         self.label_status_detail.setAlignment(Qt.AlignCenter)
+        self.label_status_detail.setStyleSheet("font-size: 14px;")
         status_layout.addWidget(self.label_status_detail)
         self.kartu_status.setVisible(False)
         body.addWidget(self.kartu_status, alignment=Qt.AlignHCenter)
@@ -192,7 +192,7 @@ class KioskWindow(QWidget):
 
         footer = QLabel("Arahkan wajah ke kamera untuk siswa berikutnya")
         footer.setAlignment(Qt.AlignHCenter)
-        footer.setStyleSheet(f"color: {WARNA['teks_muted']}; font-size: 12px; padding: 12px;")
+        footer.setStyleSheet(f"color: {WARNA['teks_muted']}; font-size: 14px; padding: 10px;")
         kartu_layout.addWidget(footer)
 
         outer = QHBoxLayout()
@@ -231,15 +231,21 @@ class KioskWindow(QWidget):
             # Format BGR ke RGB untuk Qt
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             q_img = QImage(frame_rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
-            # Crop center/scaled ke ukuran 160x160
-            pixmap = QPixmap.fromImage(q_img).scaled(160, 160, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+            # Crop center/scaled ke ukuran 420x420
+            pixmap = QPixmap.fromImage(q_img).scaled(420, 420, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
             self.label_foto.setPixmap(pixmap)
 
             self._proses_frame(frame)
 
     def _proses_frame(self, frame_bgr: np.ndarray) -> None:
         hasil_deteksi = self.engine.proses_frame(frame_bgr)
-        if not hasil_deteksi.wajah_terdeteksi or not hasil_deteksi.lolos_liveness:
+        if not hasil_deteksi.wajah_terdeteksi:
+            return
+
+        if not hasil_deteksi.lolos_liveness:
+            alasan = (hasil_deteksi.alasan_gagal or "").lower()
+            if "spoof" in alasan:
+                self._tampilkan_hasil_spoofing(hasil_deteksi.alasan_gagal or "Terdeteksi spoofing")
             return
 
         match = cari_siswa_cocok(hasil_deteksi.embedding, self.repo, self.engine, self.face_encryption_key)
@@ -272,6 +278,10 @@ class KioskWindow(QWidget):
             self._set_kartu_status(keputusan.pesan, WARNA["bahaya_teks"], WARNA["bahaya_bg"])
             self.label_hasil.setText("Sudah absen")
             self.label_hasil.setStyleSheet(f"font-size: 15px; color: {WARNA['bahaya_teks']};")
+        elif keputusan.hasil in (HasilAbsen.DITOLAK_BELUM_WAKTUNYA_MASUK, HasilAbsen.DITOLAK_BELUM_WAKTUNYA_PULANG):
+            self._set_kartu_status(keputusan.pesan, WARNA["warning_teks"], WARNA["warning_bg"])
+            self.label_hasil.setText("Belum waktunya")
+            self.label_hasil.setStyleSheet(f"font-size: 15px; color: {WARNA['warning_teks']};")
         else:
             aksi = "masuk" if keputusan.hasil == HasilAbsen.BERHASIL_MASUK else "pulang"
             status = keputusan.rekaman.status_kehadiran_otomatis
@@ -290,6 +300,18 @@ class KioskWindow(QWidget):
         self.label_hasil.setText("Wajah tidak dikenali")
         self.label_hasil.setStyleSheet(f"font-size: 15px; color: {WARNA['teks_muted']};")
         self._set_kartu_status("Pastikan sudah terdaftar / coba lagi", WARNA["teks_muted"], WARNA["netral_bg"])
+        self._timer_reset.start(DURASI_TAMPIL_HASIL_MS)
+
+    def _tampilkan_hasil_spoofing(self, detail: str) -> None:
+        self._menampilkan_hasil = True
+        self.label_nama.setText("")
+        self.label_kelas.setText("")
+        self.label_hasil.setText("Akses ditolak")
+        self.label_hasil.setStyleSheet(f"font-size: 15px; color: {WARNA['bahaya_teks']};")
+        self._set_kartu_status(
+            "Wajah terdeteksi sebagai foto/video. Silakan gunakan wajah asli di depan kamera",
+            WARNA["bahaya_teks"], WARNA["bahaya_bg"],
+        )
         self._timer_reset.start(DURASI_TAMPIL_HASIL_MS)
 
     def _set_kartu_status(self, teks: str, warna_teks: str, warna_bg: str) -> None:

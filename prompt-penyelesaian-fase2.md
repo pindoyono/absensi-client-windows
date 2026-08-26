@@ -50,6 +50,7 @@ masuk yang valid adalah tombol "Login dengan Google Sekolah".
 
 Apakah tombol "Login Admin" memang seharusnya tampil di kiosk yang
 menghadap siswa sepanjang hari? Dua opsi wajar:
+
 - **Opsi A**: biarkan tampil, tapi pastikan SATU-SATUNYA jalur masuk
   adalah Google OAuth asli (setelah bypass di atas dihapus, ini sudah
   cukup aman — siswa iseng klik tombol itu paling mentok cuma bisa
@@ -76,9 +77,11 @@ internet ada. Ikuti urutan diagnosa ini:
 ### 2.1 Test konektivitas independen dari aplikasi
 
 Di PowerShell, di komputer kiosk yang sama:
+
 ```powershell
 Invoke-WebRequest https://absen.smkn2malinau.sch.id/health
 ```
+
 ✅ Kalau ini berhasil (`{"status":"ok"}`) tapi aplikasi tetap bilang
 "Offline" → bug di aplikasi, lanjut ke 2.2.
 ❌ Kalau ini GAGAL → bukan bug aplikasi, cek jaringan komputer itu
@@ -89,6 +92,7 @@ Invoke-WebRequest https://absen.smkn2malinau.sch.id/health
 ```powershell
 type .env | findstr SERVER_URL
 ```
+
 Pastikan persis `SERVER_URL=https://absen.smkn2malinau.sch.id` — tanpa
 salah ketik, tanpa spasi tersembunyi, tanpa `http://` (harus `https://`).
 
@@ -246,10 +250,12 @@ def _start_cam(self, engine, repo, face_encryption_key):
 ## 🟡 PRIORITAS 4 — Rapikan duplikasi kode OAuth
 
 Ada 2 implementasi OAuth flow yang tumpang tindih:
+
 - `app/device/oauth_server.py` — implicit flow, port hardcode 18080, **ini yang benar-benar dipakai** `admin_window.py`
 - `app/device/setup.py` — authorization code flow + `client_secret`, port dinamis, **fungsi OAuth-nya jadi kode mati** (cuma `simpan_config_lokal`/`load_config_lokal`/`update_env_file` yang masih dipakai)
 
 Pilih salah satu jadi satu-satunya sumber kebenaran:
+
 - Kalau tetap pakai implicit flow (`oauth_server.py`) — **hapus** fungsi OAuth di `setup.py` (`buka_browser_google_oauth`, `tukar_code_untuk_token`, `login_dengan_id_token` kalau tidak dipakai lagi, `registrasi_device`, `proses_setup_device`), sisakan cuma fungsi config lokal yang memang masih dipakai.
 - Pindahkan fungsi config lokal (`simpan_config_lokal`, `load_config_lokal`, `update_env_file`, `CONFIG_PATH`) ke file baru `app/device/config_lokal.py` supaya jelas pemisahannya, atau biarkan di `setup.py` tapi hapus semua yang tidak terpakai supaya tidak membingungkan pembaca kode berikutnya.
 
@@ -304,8 +310,9 @@ README saat ini masih bilang "41 test lulus" dan membahas
 `OpenCVPlaceholderEngine` seolah MiniFASNet belum terintegrasi. Setelah
 semua di atas selesai, update bagian "Status Fase 2" mencerminkan
 kondisi sebenarnya: jumlah test terbaru, engine yang dipakai (MiniFASNet
-+ ArcFace), status mode online, status enrollment-ke-server, dan
-checklist item mana yang masih tersisa.
+
+- ArcFace), status mode online, status enrollment-ke-server, dan
+  checklist item mana yang masih tersisa.
 
 ---
 
@@ -346,3 +353,5 @@ lolos), berarti `AMBANG_LIVENESS` atau `INDEKS_KELAS_LIVE` di
 
 Setelah semua tercentang, baru pantas dianggap Fase 2 selesai dan siap
 pilot terbatas (1 kelas) sebelum lanjut ke Fase 3 (Client Android).
+
+Sesuai instruksi, langkah selanjutnya adalah Kalibrasi dengan lebih banyak orang dan Uji webcam fisik. Apakah Anda ingin saya membantu menjalankan script kalibrasi sekarang?

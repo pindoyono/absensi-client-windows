@@ -60,10 +60,14 @@ def test_masuk_dalam_toleransi_tetap_normal(repo):
 
 def test_pulang_cepat_terdeteksi(repo):
     proses_absen(repo, 1, "dev1", JAM_MASUK, JAM_PULANG, sekarang=datetime(2026, 8, 24, 7, 2))
+    # Tambahkan dispensasi agar scan pada 13:00 (sebelum jam pulang 15:00) tidak ditolak
+    repo.replace_dispensasi_cache("2026-08-24", [
+        {"siswa_id": 1, "tanggal": "2026-08-24", "jenis": "PULANG_CEPAT", "kategori": "IZIN", "alasan": "Acara keluarga"}
+    ])
     keputusan = proses_absen(
         repo, 1, "dev1", JAM_MASUK, JAM_PULANG, sekarang=datetime(2026, 8, 24, 13, 0),
     )
-    assert keputusan.rekaman.status_kehadiran_otomatis == "PULANG_CEPAT"
+    assert keputusan.rekaman.status_kehadiran_otomatis == "IZIN"
 
 
 def test_siswa_berbeda_tidak_saling_pengaruh(repo):
@@ -82,3 +86,36 @@ def test_hari_berbeda_boleh_absen_lagi(repo):
         repo, 1, "dev1", JAM_MASUK, JAM_PULANG, sekarang=datetime(2026, 8, 25, 7, 2),
     )
     assert keputusan.hasil == HasilAbsen.BERHASIL_MASUK
+
+def test_masuk_sebelum_jendela_2jam_ditolak(repo):
+    keputusan = proses_absen(
+        repo, 1, "dev1", JAM_MASUK, JAM_PULANG, sekarang=datetime(2026, 8, 24, 4, 0),
+    )
+    assert keputusan.hasil == HasilAbsen.DITOLAK_BELUM_WAKTUNYA_MASUK
+    assert "Belum waktunya" in keputusan.pesan
+    assert repo.status_hari_ini(1, "2026-08-24") == "BELUM_ABSEN"
+
+def test_masuk_persis_di_jendela_2jam_diterima(repo):
+    keputusan = proses_absen(
+        repo, 1, "dev1", JAM_MASUK, JAM_PULANG, sekarang=datetime(2026, 8, 24, 5, 0),
+    )
+    assert keputusan.hasil == HasilAbsen.BERHASIL_MASUK
+
+def test_pulang_sebelum_jadwal_tanpa_dispensasi_ditolak(repo):
+    proses_absen(repo, 1, "dev1", JAM_MASUK, JAM_PULANG, sekarang=datetime(2026, 8, 24, 7, 0))
+    keputusan = proses_absen(
+        repo, 1, "dev1", JAM_MASUK, JAM_PULANG, sekarang=datetime(2026, 8, 24, 12, 0),
+    )
+    assert keputusan.hasil == HasilAbsen.DITOLAK_BELUM_WAKTUNYA_PULANG
+    assert "Belum waktunya" in keputusan.pesan
+
+def test_pulang_sebelum_jadwal_dengan_dispensasi_diterima(repo):
+    proses_absen(repo, 1, "dev1", JAM_MASUK, JAM_PULANG, sekarang=datetime(2026, 8, 24, 7, 0))
+    repo.replace_dispensasi_cache("2026-08-24", [
+        {"siswa_id": 1, "tanggal": "2026-08-24", "jenis": "PULANG_CEPAT", "kategori": "SAKIT", "alasan": "Demam"}
+    ])
+    keputusan = proses_absen(
+        repo, 1, "dev1", JAM_MASUK, JAM_PULANG, sekarang=datetime(2026, 8, 24, 12, 0),
+    )
+    assert keputusan.hasil == HasilAbsen.BERHASIL_PULANG
+    assert keputusan.rekaman.status_kehadiran_otomatis == "SAKIT"
