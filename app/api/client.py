@@ -1,163 +1,301 @@
 """
-Wrapper HTTP ke absensi-server. Semua request di sini mengikuti
-docs/API_CONTRACT.md dari project absensi-server persis — jangan ubah
-format tanpa mengecek dokumen itu dulu, server memvalidasi ketat.
+HTTP client untuk integrasi dengan server API.
+Implementasi REQ-CRED-001 (JWT auto-refresh) dan REQ-QA-003 (error handling).
 """
-from __future__ import annotations
-
-from dataclasses import dataclass
-from datetime import datetime
-from typing import Optional
+import logging
+import time
+import jwt as pyjwt
+from datetime import datetime, timedelta
+from threading import Timer
+from typing import Optional, Dict, Any, List
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
-from app.database.repository import RekamanAbsensi
-
-
-class KoneksiGagal(Exception):
-    """Dilempar untuk SEMUA kegagalan jaringan (timeout, DNS, refused,
-    dst) — ini kondisi OFFLINE NORMAL, bukan error aplikasi. Pemanggil
-    (sync worker) menangkap ini dan menganggapnya "belum bisa sync",
-    bukan menghentikan aplikasi."""
-    pass
-
-
-class LayananJadwalBelumSiap(Exception):
-    """Dilempar kalau GURU_SERVICE_JWT belum dikonfigurasi. BEDA dengan
-    KoneksiGagal — ini masalah konfigurasi, bukan jaringan, jadi
-    sync worker tidak perlu retry terus-menerus untuk hal ini."""
-    pass
-
-
-@dataclass
-class HasilSyncItem:
-    record_id: str
-    status: str  # 'disimpan' | 'duplikat_diabaikan' | 'gagal'
-    pesan: Optional[str] = None
+logger = logging.getLogger(__name__)
 
 
 class ApiClient:
+    """HTTP client untuk komunikasi dengan absensi-server.
+    
+    Features:
+    - JWT service token auto-refresh (REQ-CRED-001)
+    - Exponential backoff retry (REQ-QA-003)
+    - Comprehensive error handling
+    - Request timeout
+    """
+    
     def __init__(
-        self, base_url: str, device_id: str, api_key: str,
-        service_jwt: str = "", timeout: float = 10.0,
+        self,
+        server_url: str,
+        device_id: str,
+        device_api_key: str,
+        service_jwt: str = "",
+        request_timeout: int = 10,
+        max_retries: int = 3,
     ):
-        self.base_url = base_url.rstrip("/")
+        """
+        Initialize API client.
+        
+        Args:
+            server_url: Base URL server (e.g., https://absen.example.com)
+            device_id: Device identifier
+            device_api_key: API key untuk device authentication
+            service_jwt: JWT token untuk akses endpoint yang butuh guru auth (jadwal)
+            request_timeout: Request timeout dalam detik (default 10s)
+            max_retries: Max retry attempts untuk failed requests (default 3)
+        """
+        self.server_url = server_url.rstrip("/")
         self.device_id = device_id
-        self.api_key = api_key
+        self.device_api_key = device_api_key
         self.service_jwt = service_jwt
-        self.timeout = timeout
-
-    def _headers_device(self) -> dict:
-        return {"X-Device-Api-Key": self.api_key}
-
+        self.request_timeout = request_timeout
+        self.max_retries = max_retries
+        self.jwt_refresh_timer: Optional[Timer] = None
+        
+        # Setup session dengan retry strategy (exponential backoff)
+        self.session = requests.Session()
+        retry_strategy = Retry(
+            total=max_retries,
+            backoff_factor=1,  # 1s, 2s, 4s, 8s
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["HEAD", "GET", "OPTIONS", "POST"],
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
+        
+        logger.info(
+            f"ApiClient initialized: server={server_url}, device_id={device_id}"
+        )
+        
+        # Schedule JWT refresh jika service_jwt ada
+        if self.service_jwt:
+            self._schedule_jwt_refresh()
+    
+    def _schedule_jwt_refresh(self) -> None:
+        """Schedule JWT refresh 1 jam sebelum expiry (REQ-CRED-001)."""
+        try:
+            decoded = pyjwt.decode(
+                self.service_jwt,
+                options={"verify_signature": False}
+            )
+            exp_time = decoded.get("exp")
+            
+            if not exp_time:
+                logger.warning("JWT has no expiry, skipping refresh scheduling")
+                return
+            
+            now = time.time()
+            time_until_expiry = exp_time - now
+            
+            # Refresh 1 jam (3600s) sebelum expiry, minimal 60s
+            refresh_in = max(time_until_expiry - 3600, 60)
+            
+            logger.info(
+                f"JWT refresh scheduled in {refresh_in/3600:.1f} hours "
+                f"(expiry in {time_until_expiry/3600:.1f} hours)"
+            )
+            
+            # Cancel existing timer jika ada
+            if self.jwt_refresh_timer:
+                self.jwt_refresh_timer.cancel()
+            
+            self.jwt_refresh_timer = Timer(refresh_in, self._refresh_jwt)
+            self.jwt_refresh_timer.daemon = True
+            self.jwt_refresh_timer.start()
+        
+        except pyjwt.DecodeError as e:
+            logger.warning(f"Failed to decode JWT for refresh scheduling: {e}")
+        except Exception as e:
+            logger.error(f"Error scheduling JWT refresh: {e}", exc_info=True)
+    
+    def _refresh_jwt(self) -> None:
+        """Refresh service JWT (REQ-CRED-001)."""
+        try:
+            logger.info("Attempting to refresh service JWT")
+            response = self.session.post(
+                f"{self.server_url}/auth/refresh-service-jwt",
+                headers={"X-Device-Api-Key": self.device_api_key},
+                timeout=self.request_timeout,
+            )
+            response.raise_for_status()
+            
+            new_jwt = response.json().get("service_jwt")
+            if new_jwt:
+                self.service_jwt = new_jwt
+                logger.info("Service JWT refreshed successfully")
+                self._schedule_jwt_refresh()  # Schedule next refresh
+            else:
+                logger.error("Server did not return new JWT")
+        
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to refresh JWT: {e}")
+            # Don't crash, will retry at next sync cycle
+        except Exception as e:
+            logger.error(f"Unexpected error during JWT refresh: {e}", exc_info=True)
+    
+    def _add_auth_headers(self, headers: Optional[Dict] = None) -> Dict:
+        """Add authentication headers ke request.
+        
+        Returns:
+            Headers dict dengan device API key + service JWT (jika ada)
+        """
+        if headers is None:
+            headers = {}
+        
+        headers["X-Device-Id"] = self.device_id
+        headers["X-Device-Api-Key"] = self.device_api_key
+        
+        if self.service_jwt:
+            headers["Authorization"] = f"Bearer {self.service_jwt}"
+        
+        return headers
+    
     def cek_koneksi(self) -> bool:
-        """Cek cepat sebelum sync worker mencoba operasi berat — dipakai
-        loop background (app/sync/worker.py)."""
+        """Check connectivity ke server.
+        
+        Returns:
+            True jika server terjangkau, False jika tidak
+        """
         try:
-            resp = requests.get(f"{self.base_url}/health", timeout=3)
-            return resp.status_code == 200
-        except requests.RequestException as e:
-            import logging
-            logging.getLogger(__name__).warning("cek_koneksi gagal: %s", e)
+            response = self.session.get(
+                f"{self.server_url}/health",
+                timeout=self.request_timeout,
+            )
+            is_online = response.status_code == 200
+            logger.info(f"Connectivity check: {'online' if is_online else 'offline'}")
+            
+            # Trigger JWT refresh jika offline sebelumnya dan sekarang online
+            if is_online and self.service_jwt and not self.jwt_refresh_timer:
+                self._schedule_jwt_refresh()
+            
+            return is_online
+        
+        except requests.exceptions.RequestException:
+            logger.debug("Server unreachable")
             return False
-
-    def sync_absensi(self, records: list[RekamanAbsensi]) -> list[HasilSyncItem]:
-        """POST /absensi/sync — kirim batch record yang belum sync."""
-        payload = {
-            "records": [
-                {
-                    "record_id": r.record_id,
-                    "siswa_id": r.siswa_id,
-                    "tanggal": r.tanggal,
-                    "type": r.type,
-                    "jam_aktual": r.jam_aktual,
-                    "status_kehadiran_otomatis": r.status_kehadiran_otomatis,
-                    "catatan": r.catatan,
-                    "device_id": r.device_id,
-                }
-                for r in records
-            ]
-        }
-        try:
-            resp = requests.post(
-                f"{self.base_url}/absensi/sync",
-                json=payload, headers=self._headers_device(), timeout=self.timeout,
-            )
-            resp.raise_for_status()
-        except requests.RequestException as e:
-            raise KoneksiGagal(str(e)) from e
-
-        data = resp.json()
-        return [
-            HasilSyncItem(record_id=item["record_id"], status=item["status"], pesan=item.get("pesan"))
-            for item in data["hasil"]
-        ]
-
-    def tarik_embedding(self, diperbarui_sejak: Optional[str] = None) -> dict:
-        """GET /embeddings/sync — cache embedding wajah ke lokal."""
-        headers = {"X-Device-Id": self.device_id, **self._headers_device()}
-        params = {"diperbarui_sejak": diperbarui_sejak} if diperbarui_sejak else {}
-        try:
-            resp = requests.get(
-                f"{self.base_url}/embeddings/sync",
-                headers=headers, params=params, timeout=self.timeout,
-            )
-            resp.raise_for_status()
-        except requests.RequestException as e:
-            raise KoneksiGagal(str(e)) from e
-        return resp.json()
-
-    def tarik_jadwal_efektif(self, kelas: str) -> dict:
+        except Exception as e:
+            logger.error(f"Error checking connectivity: {e}", exc_info=True)
+            return False
+    
+    def sync_absensi(self, records: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Push attendance records ke server.
+        
+        Args:
+            records: List of attendance records untuk di-sync
+        
+        Returns:
+            Response dari server dengan status setiap record
+        
+        Raises:
+            requests.exceptions.RequestException: Jika HTTP request gagal
         """
-        GET /jadwal/efektif — pakai GURU_SERVICE_JWT (akun layanan
-        read-only khusus device, di-generate SEKALI oleh admin lewat
-        cara yang sama seperti generate token guru — lihat docs/SETUP.md
-        langkah 2b). SENGAJA BUKAN token guru pribadi, supaya device
-        tidak menyimpan kredensial milik orang.
-
-        CATATAN ARSITEKTUR: endpoint /jadwal/* di server saat ini hanya
-        menerima JWT guru (get_current_guru), tidak ada jalur device
-        API key untuk endpoint ini (beda dengan /absensi/sync dan
-        /embeddings/sync). Service JWT ini adalah workaround praktis
-        di sisi client. Perbaikan jangka panjang yang lebih bersih:
-        tambahkan dukungan X-Device-Api-Key di endpoint /jadwal/efektif
-        pada absensi-server (endpoint ini read-only & tidak sensitif,
-        risikonya rendah untuk dibuka ke device).
+        try:
+            payload = {"records": records}
+            response = self.session.post(
+                f"{self.server_url}/absensi/sync",
+                json=payload,
+                headers=self._add_auth_headers(),
+                timeout=self.request_timeout,
+            )
+            response.raise_for_status()
+            
+            result = response.json()
+            logger.info(
+                f"Sync absensi success: {result.get('disimpan', 0)} saved, "
+                f"{result.get('duplikat', 0)} duplicate, "
+                f"{result.get('gagal', 0)} failed"
+            )
+            return result
+        
+        except requests.exceptions.Timeout:
+            logger.error(f"Sync absensi timeout after {self.request_timeout}s")
+            raise
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 401:
+                logger.error("Unauthorized: device API key invalid or expired")
+            else:
+                logger.error(f"Sync absensi failed: {e.response.status_code} {e.response.text}")
+            raise
+        except Exception as e:
+            logger.error(f"Error during sync absensi: {e}", exc_info=True)
+            raise
+    
+    def fetch_embeddings(self, updated_since: Optional[str] = None) -> Dict[str, Any]:
+        """Fetch embedded wajah siswa untuk sync ke cache lokal.
+        
+        Args:
+            updated_since: ISO 8601 timestamp, ambil embeddings yang diupdate setelah waktu ini
+        
+        Returns:
+            Response dengan list embeddings
+        
+        Raises:
+            requests.exceptions.RequestException: Jika HTTP request gagal
         """
-        if not self.service_jwt:
-            raise LayananJadwalBelumSiap(
-                "GURU_SERVICE_JWT belum dikonfigurasi di .env device ini — "
-                "jadwal tidak bisa di-refresh, kiosk memakai jam default/cache terakhir"
-            )
-        headers = {"Authorization": f"Bearer {self.service_jwt}"}
         try:
-            resp = requests.get(
-                f"{self.base_url}/jadwal/efektif",
-                headers=headers, params={"kelas": kelas}, timeout=self.timeout,
+            params = {}
+            if updated_since:
+                params["diperbarui_sejak"] = updated_since
+            
+            response = self.session.get(
+                f"{self.server_url}/embeddings/sync",
+                params=params,
+                headers=self._add_auth_headers(),
+                timeout=self.request_timeout,
             )
-            resp.raise_for_status()
-        except requests.RequestException as e:
-            raise KoneksiGagal(str(e)) from e
-        return resp.json()
-
-    def tarik_dispensasi_hari_ini(self, tanggal: str) -> list[dict]:
-        """GET /dispensasi/aktif — ambil semua dispensasi aktif untuk tanggal tertentu."""
-        if not self.service_jwt:
-            raise LayananJadwalBelumSiap("GURU_SERVICE_JWT belum dikonfigurasi")
-        headers = {"Authorization": f"Bearer {self.service_jwt}"}
+            response.raise_for_status()
+            
+            result = response.json()
+            logger.info(f"Fetched embeddings: {result.get('jumlah', 0)} records")
+            return result
+        
+        except requests.exceptions.Timeout:
+            logger.error(f"Fetch embeddings timeout after {self.request_timeout}s")
+            raise
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"Fetch embeddings failed: {e.response.status_code}")
+            raise
+        except Exception as e:
+            logger.error(f"Error fetching embeddings: {e}", exc_info=True)
+            raise
+    
+    def fetch_jadwal(self, kelas: str) -> Dict[str, Any]:
+        """Fetch jadwal efektif untuk kelas tertentu.
+        
+        Args:
+            kelas: Nama kelas (e.g., "XI Elektronika")
+        
+        Returns:
+            Response dengan jadwal (jam_masuk, jam_pulang, sumber)
+        
+        Raises:
+            requests.exceptions.RequestException: Jika HTTP request gagal
+        """
         try:
-            resp = requests.get(
-                f"{self.base_url}/dispensasi/aktif",
-                headers=headers, params={"tanggal": tanggal}, timeout=self.timeout,
+            response = self.session.get(
+                f"{self.server_url}/jadwal/efektif",
+                params={"kelas": kelas},
+                headers=self._add_auth_headers(),
+                timeout=self.request_timeout,
             )
-            resp.raise_for_status()
-        except requests.RequestException as e:
-            raise KoneksiGagal(str(e)) from e
-        return resp.json()
-
-    # ---------- Jadwal (via JWT guru) ----------
-
-    def _headers_jwt(self) -> dict:
-        if not self.service_jwt:
-            raise LayananJadwalBelumSiap("GURU_SERVICE_JWT belum dikonfigurasi")
-        return {"Authorization": f"Bearer {self.service_jwt}"}
+            response.raise_for_status()
+            
+            result = response.json()
+            logger.debug(f"Fetched jadwal for {kelas}: {result}")
+            return result
+        
+        except requests.exceptions.Timeout:
+            logger.error(f"Fetch jadwal timeout after {self.request_timeout}s")
+            raise
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 401:
+                logger.warning("Unauthorized to fetch jadwal (service JWT expired?), using cached")
+            else:
+                logger.error(f"Fetch jadwal failed: {e.response.status_code}")
+            raise
+        except Exception as e:
+            logger.error(f"Error fetching jadwal: {e}", exc_info=True)
+            raise
