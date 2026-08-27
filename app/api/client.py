@@ -153,6 +153,7 @@ class ApiClient:
         self.max_retries = max_retries
         self.cert_pin = cert_pin
         self.audit_logger = audit_logger
+        self.backup_device_api_key: Optional[str] = None
         self.jwt_refresh_timer: Optional[Timer] = None
         self.rate_limiter = RateLimiter(max_requests=60, window_seconds=60)
         
@@ -207,6 +208,39 @@ class ApiClient:
         headers["X-Signature"] = signature
         headers["X-Timestamp"] = timestamp
         return headers
+    
+    def rotate_api_key(self, new_api_key: str) -> None:
+        """Rotate device API key (REQ-CRED-003).
+        
+        Called when 401 detected or manual rotation by admin.
+        Stores old key as backup for fallback.
+        """
+        self.backup_device_api_key = self.device_api_key
+        self.device_api_key = new_api_key
+        logger.info("API key rotated successfully")
+        if self.audit_logger:
+            self.audit_logger.log_event(
+                event_type="API_KEY_ROTATION",
+                action="Device API key rotated",
+                status="success",
+                details={"device_id": self.device_id},
+            )
+    
+    def _handle_auth_failure(self) -> None:
+        """Handle 401 auth failure — try backup key if available (REQ-CRED-003)."""
+        if self.backup_device_api_key:
+            logger.warning("Primary API key failed, falling back to backup key")
+            self.device_api_key, self.backup_device_api_key = self.backup_device_api_key, None
+            if self.audit_logger:
+                self.audit_logger.log_auth_failure(
+                    self.device_id, "Fallback to backup API key", "api_key"
+                )
+        else:
+            logger.error("API key invalid and no backup available")
+            if self.audit_logger:
+                self.audit_logger.log_auth_failure(
+                    self.device_id, "API key invalid, no backup", "api_key"
+                )
     
     def _schedule_jwt_refresh(self) -> None:
         """Schedule JWT refresh 1 jam sebelum expiry (REQ-CRED-001)."""
@@ -366,8 +400,7 @@ class ApiClient:
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 401:
                 logger.error("Unauthorized: device API key invalid or expired")
-                if self.audit_logger:
-                    self.audit_logger.log_auth_failure(self.device_id, "HTTP 401 from server")
+                self._handle_auth_failure()
             else:
                 logger.error(f"Sync absensi failed: {e.response.status_code} {e.response.text}")
             raise KoneksiGagal(str(e)) from e
