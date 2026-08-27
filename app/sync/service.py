@@ -8,6 +8,8 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, date as date_cls
 
+import requests
+
 from app.api.client import ApiClient, KoneksiGagal, LayananJadwalBelumSiap
 from app.database.repository import AbsensiRepository
 
@@ -28,10 +30,11 @@ class RingkasanSiklus:
 
 
 class SyncService:
-    def __init__(self, repo: AbsensiRepository, api: ApiClient, batas_batch: int = 100):
+    def __init__(self, repo: AbsensiRepository, api: ApiClient, batas_batch: int = 100, audit_logger=None):
         self.repo = repo
         self.api = api
         self.batas_batch = batas_batch
+        self.audit_logger = audit_logger
 
     def siklus_sync(self) -> RingkasanSiklus:
         """Satu siklus sync lengkap: cek koneksi -> push absensi belum
@@ -59,7 +62,7 @@ class SyncService:
                     else:
                         ringkasan.gagal += 1
                         logger.warning("Sync gagal untuk record %s: %s", hasil.record_id, hasil.pesan)
-            except KoneksiGagal as e:
+            except (KoneksiGagal, requests.exceptions.RequestException) as e:
                 # Koneksi putus di TENGAH proses push — record tetap
                 # synced=0, akan dicoba lagi siklus berikutnya. Bukan error
                 # fatal, ini skenario offline-first yang memang diantisipasi.
@@ -98,7 +101,7 @@ class SyncService:
             # Bukan error jaringan — cukup dicatat, kiosk tetap jalan
             # pakai jam default/cache terakhir (lihat main.py)
             logger.info("Jadwal tidak di-refresh: %s", e)
-        except KoneksiGagal as e:
+        except (KoneksiGagal, requests.exceptions.RequestException) as e:
             ringkasan.pesan_error = (ringkasan.pesan_error or "") + f" | Koneksi terputus saat tarik jadwal: {e}"
 
         # --- Tarik dispensasi aktif hari ini ---
@@ -109,7 +112,7 @@ class SyncService:
             ringkasan.dispensasi_diperbarui = len(entries)
         except LayananJadwalBelumSiap as e:
             logger.info("Dispensasi tidak di-refresh: %s", e)
-        except KoneksiGagal as e:
+        except (KoneksiGagal, requests.exceptions.RequestException) as e:
             ringkasan.pesan_error = (ringkasan.pesan_error or "") + f" | Koneksi terputus saat tarik dispensasi: {e}"
 
         return ringkasan

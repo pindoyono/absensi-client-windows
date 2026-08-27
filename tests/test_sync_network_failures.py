@@ -5,7 +5,7 @@ import pytest
 from unittest.mock import Mock, patch, MagicMock
 from app.sync.service import SyncService
 from app.database.repository import AbsensiRepository
-from app.api.client import ApiClient
+from app.api.client import ApiClient, HasilSyncItem
 import requests
 
 
@@ -16,7 +16,8 @@ class TestSyncNetworkFailures:
     def mock_repo(self):
         """Create mock repository."""
         repo = Mock(spec=AbsensiRepository)
-        repo.record_belum_sync.return_value = []
+        repo.record_belum_sync.return_value = [{"record_id": "test-1", "siswa_id": 1, "tanggal": "2026-08-24", "type": "MASUK", "jam_aktual": "07:00:00", "status_kehadiran_otomatis": "NORMAL", "catatan": None, "device_id": "dev1", "synced": False, "sync_status": None}]
+        repo.daftar_kelas.return_value = ["XI Elektronika"]
         return repo
 
     @pytest.fixture
@@ -24,6 +25,9 @@ class TestSyncNetworkFailures:
         """Create mock API client."""
         api = Mock(spec=ApiClient)
         api.cek_koneksi.return_value = True
+        api.tarik_embedding.return_value = {"jumlah": 0, "data": [], "server_time": "2026-08-24T00:00:00"}
+        api.tarik_jadwal_efektif.return_value = {}
+        api.tarik_dispensasi_hari_ini.return_value = []
         return api
 
     def test_sync_with_timeout(self, mock_repo, mock_api):
@@ -31,20 +35,22 @@ class TestSyncNetworkFailures:
         mock_api.sync_absensi.side_effect = requests.exceptions.Timeout()
         
         sync = SyncService(mock_repo, mock_api)
-        result = sync.sinkron()
+        result = sync.siklus_sync()
         
         # Should handle gracefully, not crash
         assert result is not None
-        assert result.online is False
+        assert result.online is True  # connectivity check passed
+        assert result.pesan_error is not None  # but push failed
 
     def test_sync_with_connection_error(self, mock_repo, mock_api):
         """Test sync handling when connection fails."""
         mock_api.sync_absensi.side_effect = requests.exceptions.ConnectionError()
         
         sync = SyncService(mock_repo, mock_api)
-        result = sync.sinkron()
+        result = sync.siklus_sync()
         
-        assert result.online is False
+        assert result.online is True  # connectivity check passed
+        assert result.pesan_error is not None  # but push failed
 
     def test_sync_with_server_error(self, mock_repo, mock_api):
         """Test sync handling on server 5xx error."""
@@ -53,29 +59,26 @@ class TestSyncNetworkFailures:
         mock_api.sync_absensi.side_effect = requests.exceptions.HTTPError(response=mock_response)
         
         sync = SyncService(mock_repo, mock_api)
-        result = sync.sinkron()
+        result = sync.siklus_sync()
         
-        assert result.online is False
+        assert result.online is True  # connectivity check passed
+        assert result.pesan_error is not None  # but push failed
 
     def test_partial_sync_success(self, mock_repo, mock_api):
         """Test sync with partial success (some records fail)."""
-        mock_api.sync_absensi.return_value = {
-            "total": 3,
-            "disimpan": 2,
-            "duplikat": 0,
-            "gagal": 1,
-            "hasil": [
-                {"record_id": "1", "status": "disimpan"},
-                {"record_id": "2", "status": "disimpan"},
-                {"record_id": "3", "status": "gagal"},
-            ],
-        }
+        mock_api.sync_absensi.return_value = [
+            HasilSyncItem(record_id="1", status="disimpan"),
+            HasilSyncItem(record_id="2", status="disimpan"),
+            HasilSyncItem(record_id="3", status="gagal"),
+        ]
         
         sync = SyncService(mock_repo, mock_api)
-        result = sync.sinkron()
+        result = sync.siklus_sync()
         
         # Should handle partial success
         assert result.online is True
+        assert result.disimpan == 2
+        assert result.gagal == 1
 
 
 class TestSyncJadwalFailover:
@@ -84,16 +87,21 @@ class TestSyncJadwalFailover:
     def test_jadwal_fetch_with_expired_jwt(self):
         """Test jadwal fetch when JWT is expired (401)."""
         mock_repo = Mock(spec=AbsensiRepository)
+        mock_repo.record_belum_sync.return_value = []
+        mock_repo.daftar_kelas.return_value = ["XI Elektronika"]
         mock_api = Mock(spec=ApiClient)
+        mock_api.cek_koneksi.return_value = True
+        mock_api.tarik_embedding.return_value = {"jumlah": 0, "data": [], "server_time": "2026-08-24T00:00:00"}
+        mock_api.tarik_dispensasi_hari_ini.return_value = []
         
         # Simulate 401 on jadwal fetch
         mock_response = Mock()
         mock_response.status_code = 401
-        mock_api.fetch_jadwal.side_effect = requests.exceptions.HTTPError(response=mock_response)
+        mock_api.tarik_jadwal_efektif.side_effect = requests.exceptions.HTTPError(response=mock_response)
         
         sync = SyncService(mock_repo, mock_api)
         
         # Should gracefully handle, use cached jadwal
         # (implementation detail: graceful degradation)
-        result = sync.sinkron()
+        result = sync.siklus_sync()
         assert result is not None

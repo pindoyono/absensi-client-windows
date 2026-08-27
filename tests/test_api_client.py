@@ -39,7 +39,7 @@ def test_sync_absensi_format_request_sesuai_kontrak():
         "rid-1", 1, "2026-08-24", "MASUK", "2026-08-24T07:00:00",
         "NORMAL", None, "dev1", False, None,
     )
-    hasil = api.sync_absensi([rekaman])
+    hasil = api.sync_absensi([rekaman.asdict()])
 
     assert len(hasil) == 1
     assert hasil[0].status == "disimpan"

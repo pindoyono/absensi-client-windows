@@ -32,11 +32,12 @@ class KioskWindow(QWidget):
         self, repo: AbsensiRepository, engine: FaceEngine,
         device_id: str, face_encryption_key: str,
         jam_masuk_standar: dtime, jam_pulang_standar: dtime,
-        gunakan_kamera: bool = True, parent=None,
+        gunakan_kamera: bool = True, parent=None, audit_logger=None,
     ):
         super().__init__(parent)
         self.repo = repo
         self.engine = engine
+        self.audit_logger = audit_logger
         self.device_id = device_id
         self.face_encryption_key = face_encryption_key
         self.jam_masuk_standar = jam_masuk_standar

@@ -59,15 +59,15 @@ def test_decrypt_embedding_key_salah_raise_error_jelas():
 
 def test_matcher_menemukan_siswa_paling_mirip(repo, engine):
     key = Fernet.generate_key().decode()
-    emb_a = [1.0, 0.0, 0.0] + [0.0] * 61
-    emb_b = [0.0, 1.0, 0.0] + [0.0] * 61
+    emb_a = [1.0, 0.0, 0.0] + [0.0] * 509
+    emb_b = [0.0, 1.0, 0.0] + [0.0] * 509
 
     repo.upsert_siswa(1, "A001", "Siswa A", "XI")
     repo.upsert_siswa(2, "A002", "Siswa B", "XI")
     repo.upsert_embedding(1, _encrypt(emb_a, key), "test-v0", "2026-08-24T00:00:00")
     repo.upsert_embedding(2, _encrypt(emb_b, key), "test-v0", "2026-08-24T00:00:00")
 
-    capture = np.array([0.95, 0.05, 0.0] + [0.0] * 61, dtype=np.float32)
+    capture = np.array([0.95, 0.05, 0.0] + [0.0] * 509, dtype=np.float32)
     hasil = cari_siswa_cocok(capture, repo, engine, key)
 
     assert hasil.ditemukan is True
@@ -76,17 +76,17 @@ def test_matcher_menemukan_siswa_paling_mirip(repo, engine):
 
 def test_matcher_wajah_asing_tidak_ditemukan(repo, engine):
     key = Fernet.generate_key().decode()
-    emb_a = [1.0, 0.0, 0.0] + [0.0] * 61
+    emb_a = [1.0, 0.0, 0.0] + [0.0] * 509
     repo.upsert_siswa(1, "A001", "Siswa A", "XI")
     repo.upsert_embedding(1, _encrypt(emb_a, key), "test-v0", "2026-08-24T00:00:00")
 
-    capture_asing = np.array([0.0, 0.0, 1.0] + [0.0] * 61, dtype=np.float32)
+    capture_asing = np.array([0.0, 0.0, 1.0] + [0.0] * 509, dtype=np.float32)
     hasil = cari_siswa_cocok(capture_asing, repo, engine, key)
 
     assert hasil.ditemukan is False
 
 
 def test_matcher_cache_kosong_tidak_ditemukan(repo, engine):
-    capture = np.random.rand(64).astype(np.float32)
+    capture = np.random.rand(512).astype(np.float32)
     hasil = cari_siswa_cocok(capture, repo, engine, Fernet.generate_key().decode())
     assert hasil.ditemukan is False

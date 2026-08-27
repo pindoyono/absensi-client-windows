@@ -34,6 +34,7 @@ AMBANG_LIVENESS = 0.752
 CALIBRATION_DATE = "2026-09-XX"
 CALIBRATION_TPR = 0.985  # 98.5%
 CALIBRATION_FPR = 0.004  # 0.4%
+CALIBRATION_FRR = 0.015  # 1.5% (false reject rate)
 CALIBRATION_DATASET_SIZE = 40
 CALIBRATION_NOTES = "40 samples: 20 real faces + 20 spoofing attempts"
 
@@ -71,6 +72,10 @@ def evaluasi_liveness(
             skor_live = float(output_model[indeks_live])
         else:
             skor_live = float(output_model[0].item() if hasattr(output_model[0], "item") else output_model[0])
+        
+        # Handle NaN/Inf
+        if np.isnan(skor_live) or np.isinf(skor_live):
+            return False, 0.0
         
         # Clamp skor ke range [0, 1]
         skor_live = max(0.0, min(1.0, skor_live))

@@ -8,6 +8,7 @@ from app.face.minifasnet_engine import (
     AMBANG_LIVENESS,
     INDEKS_KELAS_LIVE,
     CALIBRATION_TPR,
+    CALIBRATION_FPR,
     CALIBRATION_FRR,
 )
 
@@ -55,7 +56,8 @@ class TestLivenessEvaluation:
     def test_nan_values_handled(self):
         """Test handling of NaN values."""
         output = np.array([[0.1, np.nan, 0.85, 0.1]])
-        is_real, score = evaluasi_liveness(output, ambang=0.75)
+        # Indeks 1 adalah NaN
+        is_real, score = evaluasi_liveness(output, ambang=0.75, indeks_live=1)
         assert is_real is False  # NaN treated as failed
 
     def test_inf_values_handled(self):

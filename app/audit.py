@@ -186,6 +186,101 @@ class AuditLogger:
             error_message=error_message,
         )
     
+    def log_security_event(
+        self,
+        event_type: str,
+        action: str,
+        status: str = "success",
+        actor: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+        error_message: Optional[str] = None,
+    ) -> None:
+        """Log security-related event (REQ-SEC-005).
+        
+        Event types:
+        - AUTH_SUCCESS: Successful authentication
+        - AUTH_FAILURE: Failed authentication attempt
+        - CERT_PINNING_FAILURE: SSL certificate pinning mismatch
+        - RATE_LIMIT_BLOCKED: Request blocked by rate limiter
+        - HMAC_VERIFICATION_FAILURE: Server rejected HMAC signature
+        - TOKEN_REFRESH: JWT token refresh event
+        - TOKEN_EXPIRY: JWT token expired
+        """
+        self.log_event(
+            event_type=event_type,
+            action=action,
+            status=status,
+            actor=actor,
+            details=details,
+            error_message=error_message,
+        )
+    
+    def log_auth_success(self, actor: str, method: str = "device_api_key") -> None:
+        """Log successful authentication."""
+        self.log_security_event(
+            event_type="AUTH_SUCCESS",
+            action=f"Authentication successful via {method}",
+            actor=actor,
+            details={"method": method},
+        )
+    
+    def log_auth_failure(self, actor: str, reason: str, method: str = "device_api_key") -> None:
+        """Log failed authentication attempt."""
+        self.log_security_event(
+            event_type="AUTH_FAILURE",
+            action=f"Authentication failed via {method}",
+            status="failed",
+            actor=actor,
+            error_message=reason,
+            details={"method": method},
+        )
+    
+    def log_cert_pinning_failure(self, expected: str, actual: str) -> None:
+        """Log SSL certificate pinning failure."""
+        self.log_security_event(
+            event_type="CERT_PINNING_FAILURE",
+            action="SSL certificate pinning verification failed",
+            status="failed",
+            error_message=f"Expected fingerprint: {expected[:16]}..., Got: {actual[:16]}...",
+            details={"expected": expected[:32], "actual": actual[:32]},
+        )
+    
+    def log_rate_limit_blocked(self, endpoint: str) -> None:
+        """Log rate limit block."""
+        self.log_security_event(
+            event_type="RATE_LIMIT_BLOCKED",
+            action=f"Request blocked by rate limiter: {endpoint}",
+            status="failed",
+            details={"endpoint": endpoint},
+        )
+    
+    def log_hmac_failure(self, endpoint: str, reason: str) -> None:
+        """Log HMAC signature verification failure."""
+        self.log_security_event(
+            event_type="HMAC_VERIFICATION_FAILURE",
+            action=f"HMAC signature rejected by server: {endpoint}",
+            status="failed",
+            error_message=reason,
+            details={"endpoint": endpoint},
+        )
+    
+    def log_token_refresh(self, actor: str = "system") -> None:
+        """Log JWT token refresh."""
+        self.log_security_event(
+            event_type="TOKEN_REFRESH",
+            action="JWT service token refreshed",
+            actor=actor,
+        )
+    
+    def log_token_expiry(self, actor: str = "system") -> None:
+        """Log JWT token expiry."""
+        self.log_security_event(
+            event_type="TOKEN_EXPIRY",
+            action="JWT service token expired",
+            status="failed",
+            actor=actor,
+        )
+    
     def get_recent_logs(
         self, event_type: Optional[str] = None, limit: int = 100
     ) -> list[dict]:
@@ -201,17 +296,12 @@ class AuditLogger:
         try:
             if event_type:
                 rows = self.repo.conn.execute(
-                    """SELECT * FROM device_audit_log 
-                       WHERE event_type = ? 
-                       ORDER BY timestamp DESC 
-                       LIMIT ?"",
+                    "SELECT * FROM device_audit_log WHERE event_type = ? ORDER BY timestamp DESC LIMIT ?",
                     (event_type, limit),
                 ).fetchall()
             else:
                 rows = self.repo.conn.execute(
-                    """SELECT * FROM device_audit_log 
-                       ORDER BY timestamp DESC 
-                       LIMIT ?"",
+                    "SELECT * FROM device_audit_log ORDER BY timestamp DESC LIMIT ?",
                     (limit,),
                 ).fetchall()
             

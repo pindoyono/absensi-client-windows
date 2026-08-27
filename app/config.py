@@ -8,13 +8,15 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from app.device.credentials import CredentialManager
+
 # .env dicari di folder tempat aplikasi dijalankan (bukan hardcode path
 # development), supaya installer bisa taruh .env di sebelah .exe
 APP_DIR = Path(os.environ.get("ABSENSI_APP_DIR", Path.cwd()))
 load_dotenv(APP_DIR / ".env")
 
 
-@dataclass(frozen=True)
+@dataclass
 class Settings:
     server_url: str = os.environ.get("SERVER_URL", "https://absen.smkn2malinau.sch.id")
     device_id: str = os.environ.get("DEVICE_ID", "")
@@ -57,6 +59,21 @@ class Settings:
         if not self.db_encryption_key:
             masalah.append("DB_ENCRYPTION_KEY belum diisi di .env")
         return masalah
+
+    def __post_init__(self):
+        """Fallback ke Windows Credential Manager bila .env kosong (REQ-CRED-002)."""
+        if not self.device_api_key and CredentialManager.is_available():
+            cred = CredentialManager.get_credential("device_api_key")
+            if cred:
+                object.__setattr__(self, "device_api_key", cred)
+        if not self.face_encryption_key and CredentialManager.is_available():
+            cred = CredentialManager.get_credential("face_encryption_key")
+            if cred:
+                object.__setattr__(self, "face_encryption_key", cred)
+        if not self.db_encryption_key and CredentialManager.is_available():
+            cred = CredentialManager.get_credential("db_encryption_key")
+            if cred:
+                object.__setattr__(self, "db_encryption_key", cred)
 
 
 settings = Settings()

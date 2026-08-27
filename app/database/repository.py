@@ -28,6 +28,10 @@ class RekamanAbsensi:
     synced: bool
     sync_status: Optional[str]
 
+    def asdict(self) -> dict:
+        from dataclasses import asdict
+        return asdict(self)
+
 
 class AbsensiRepository:
     def __init__(self, conn: sqlcipher3.Connection):

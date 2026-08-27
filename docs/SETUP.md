@@ -73,17 +73,28 @@ Di folder yang sama dengan `.exe`, buat/edit file `.env`:
 SERVER_URL=https://absen.smkn2malinau.sch.id
 DEVICE_ID=gerbang-utama-01
 DEVICE_API_KEY=<api_key dari langkah 1>
-FACE_ENCRYPTION_KEY=<key dari langkah 2>
-DB_PATH=data/absensi_lokal.db
-DB_ENCRYPTION_KEY=<generate baru, khusus device ini — lihat di bawah>
 SYNC_INTERVAL_SECONDS=45
 TOLERANSI_TERLAMBAT_MENIT=5
 ```
 
+> **Keamanan (REQ-SEC-003):** Semua secret (API key, FACE_ENCRYPTION_KEY, DB_ENCRYPTION_KEY) akan otomatis disimpan di **Windows Credential Manager** pada startup pertama. Anda tidak perlu menulis key secara manual di `.env` — aplikasi akan meminta input sekali lalu menyimpannya secara aman di Windows Credential Manager.
+
 **Generate `DB_ENCRYPTION_KEY` unik untuk device ini** (jangan sama antar device):
+
 ```powershell
 python -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
+
+### 5. Credential Manager Setup (Pertama Kali Jalan)
+
+1. Jalankan aplikasi pertama kali.
+2. Jika ada dialog permintaan credential, isikan:
+   - `device_api_key` = nilai dari langkah 1
+   - `face_encryption_key` = nilai dari langkah 2
+   - `db_encryption_key` = nilai yang baru generate
+3. Credential akan disimpan di Windows Credential Manager dengan service name `AbsensiKiosk`.
+
+> **Catatan:** Jika `.env` sudah berisi key, aplikasi akan fallback ke `.env` dulu. Hapus key dari `.env` setelah verifikasi Credential Manager berfungsi.
 
 ### 5. Test jalan
 
@@ -98,6 +109,7 @@ akan muncul "Wajah tidak dikenali", ini normal).
 ### 6. Set auto-start saat Windows boot
 
 Buat shortcut ke `.exe`, taruh di folder Startup:
+
 ```
 C:\Users\<user>\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup
 ```
@@ -123,9 +135,9 @@ sebelumnya di project terpisah) sebelum pilot dengan siswa asli — lihat
 
 ## Troubleshooting
 
-| Gejala | Kemungkinan Penyebab |
-|---|---|
-| Window error "Konfigurasi Belum Lengkap" | Ada variabel `.env` yang kosong — cek pesan error, biasanya sebutkan yang mana |
-| Badge selalu "Offline" padahal internet nyala | Cek `SERVER_URL` benar, cek firewall Windows tidak blokir aplikasi |
-| "Wajah tidak dikenali" terus untuk siswa yang sudah enroll | Cek `FACE_ENCRYPTION_KEY` sama persis dengan server; cek sync embedding sudah jalan (lihat log) |
-| Kamera tidak muncul/error saat start | Cek kamera tidak dipakai aplikasi lain (Zoom, Teams, dst); cek index kamera (`cv2.VideoCapture(0)` — coba ganti ke `1` kalau ada multi-kamera) |
+| Gejala                                                     | Kemungkinan Penyebab                                                                                                                           |
+| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Window error "Konfigurasi Belum Lengkap"                   | Ada variabel `.env` yang kosong — cek pesan error, biasanya sebutkan yang mana                                                                 |
+| Badge selalu "Offline" padahal internet nyala              | Cek `SERVER_URL` benar, cek firewall Windows tidak blokir aplikasi                                                                             |
+| "Wajah tidak dikenali" terus untuk siswa yang sudah enroll | Cek `FACE_ENCRYPTION_KEY` sama persis dengan server; cek sync embedding sudah jalan (lihat log)                                                |
+| Kamera tidak muncul/error saat start                       | Cek kamera tidak dipakai aplikasi lain (Zoom, Teams, dst); cek index kamera (`cv2.VideoCapture(0)` — coba ganti ke `1` kalau ada multi-kamera) |

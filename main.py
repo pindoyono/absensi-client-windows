@@ -135,6 +135,7 @@ def main() -> int:
             settings.device_id,
             settings.device_api_key,
             service_jwt=settings.guru_service_jwt,
+            audit_logger=audit_logger,
         )
         
         # Create kiosk window

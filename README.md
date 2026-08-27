@@ -6,30 +6,28 @@ absensi walau internet mati) dan sync otomatis ke
 [absensi-server](https://github.com/pindoyono/absensi-server) begitu
 ada koneksi.
 
-## Status Fase 2
+## Status Fase 2 (Production-Ready)
 
-✅ **47 test lulus** — business logic, database lokal terenkripsi,
-API client (sesuai kontrak server), face matching, MiniFASNet engine (liveness + ArcFace),
-device setup, OAuth server, sync service, dan UI kiosk semua terverifikasi
-bekerja end-to-end di level unit/integration test.
+✅ **159 test lulus** — Security, E2E flow, Error handling, Performance baseline.
 
-✅ **Engine Produksi Terpasang** — `MiniFASNetEngine` (MiniFASNetV2 liveness + ArcFace embedding)
-sudah terintegrasi sepenuhnya dengan ambang liveness dan embedding terkalibrasi.
+🔒 **Security Hardening:**
 
-✅ **Mode Online & Google OAuth SSO** — Login admin/guru piket menggunakan Google OAuth 2.0 (implicit flow)
-sekolah, registrasi device otomatis, dan enrollment siswa langsung tersimpan ke server.
+- HMAC API Request Signing (REQ-SEC-001)
+- HTTPS Certificate Pinning (REQ-SEC-002)
+- Windows Credential Manager Integration (REQ-SEC-003/004)
+- Rate Limiting (60 req/menit)
+- Security Audit Logging
 
-🔒 **Keamanan Kiosk** — Pintu belakang `"offline"` pada login manual telah dihapus sepenuhnya.
-Hanya akun Google sekolah yang terdaftar yang bisa mengakses panel admin. (Kebijakan Opsi A: Tombol "Login Admin"
-tetap tampil di kiosk publik, terlindungi penuh oleh Google OAuth SSO).
+⚙️ **Operational Readiness:**
 
-⚠️ **Uji Webcam Fisik & Anti-Spoofing** — Sandbox pengembangan
-menggunakan frame sintesis/mock dan kamera bawaan. **Wajib dites dengan webcam asli** dan pengujian foto/video spoofing
-sebelum pilot terbatas — lihat checklist di bawah.
+- Graceful Shutdown & State Recovery (REQ-OPS-008)
+- Database Backup & Restore (REQ-OPS-004)
+- Device Health Monitoring (REQ-OPS-007)
+- Sync Status Signals (REQ-OPS-002)
 
-📝 **Catatan arsitektur**: endpoint `/jadwal/efektif` di server
-butuh JWT guru. Solusi: `GURU_SERVICE_JWT`
-(akun layanan read-only, lihat `docs/SETUP.md` langkah 2b).
+⚠️ **Before Pilot:** Liveness & Embedding Thresholds diimplementasikan berdasarkan kalibrasi placeholder. Lakukan **uji on-site** (REQ-EMBEDDING-004) sebelum digunakan 50+ siswa asli.
+
+📝 **Catatan:** Pembacaan credential sudah menggunakan Windows Credential Manager dengan fallback ke file `.env` (lihat `docs/SETUP.md`).
 
 ## Struktur project
 
@@ -86,8 +84,7 @@ python main.py
 ## Menjalankan test
 
 ```bash
-export QT_QPA_PLATFORM=offscreen  # tidak perlu di Windows dengan display asli
-pytest tests/ -v
+pytest tests/ -v  # Run all 159 tests
 ```
 
 ## Build installer untuk distribusi

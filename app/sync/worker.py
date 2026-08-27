@@ -11,6 +11,7 @@ from app.sync.service import SyncService, RingkasanSiklus
 
 class SyncWorker(QThread):
     siklus_selesai = Signal(object)  # emit RingkasanSiklus tiap siklus
+    sync_status_changed = Signal(str)  # emit sync status string untuk UI badge
 
     def __init__(self, service: SyncService, interval_detik: int = 45, parent=None):
         super().__init__(parent)
@@ -23,8 +24,18 @@ class SyncWorker(QThread):
             try:
                 ringkasan = self.service.siklus_sync()
                 self.siklus_selesai.emit(ringkasan)
+                # Emit status string untuk UI badge (REQ-OPS-002)
+                if not ringkasan.online:
+                    self.sync_status_changed.emit("OFFLINE")
+                elif ringkasan.pesan_error:
+                    self.sync_status_changed.emit("ERROR")
+                elif ringkasan.gagal > 0:
+                    self.sync_status_changed.emit("PARTIAL")
+                else:
+                    self.sync_status_changed.emit("OK")
             except Exception as e:  # noqa: BLE001 — sync worker TIDAK BOLEH mati karena 1 error
                 self.siklus_selesai.emit(RingkasanSiklus(online=False, pesan_error=str(e)))
+                self.sync_status_changed.emit("ERROR")
 
             # Tidur bertahap supaya thread bisa berhenti cepat saat app ditutup.
             for _ in range(self.interval_detik):

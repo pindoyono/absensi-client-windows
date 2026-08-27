@@ -11,7 +11,7 @@ class TestApiClientErrorHandling:
     """Test API client error handling."""
 
     def test_timeout_error_handling(self):
-        """Test handling of request timeout."""
+        """Test handling of request timeout — cek_koneksi should return False, not raise."""
         client = ApiClient(
             "https://example.com",
             "test-device",
@@ -22,8 +22,9 @@ class TestApiClientErrorHandling:
         with patch.object(client.session, "get") as mock_get:
             mock_get.side_effect = requests.exceptions.Timeout("Request timeout")
             
-            with pytest.raises(requests.exceptions.Timeout):
-                client.cek_koneksi()
+            # cek_koneksi should swallow timeout and return False
+            is_online = client.cek_koneksi()
+            assert is_online is False
 
     def test_connection_error_handling(self):
         """Test handling of connection error."""
@@ -40,7 +41,8 @@ class TestApiClientErrorHandling:
             assert is_online is False
 
     def test_http_401_unauthorized(self):
-        """Test handling of 401 Unauthorized response."""
+        """Test handling of 401 Unauthorized response — should raise KoneksiGagal."""
+        from app.api.client import KoneksiGagal
         client = ApiClient(
             "https://example.com",
             "test-device",
@@ -53,11 +55,12 @@ class TestApiClientErrorHandling:
             mock_response.text = "Unauthorized"
             mock_post.side_effect = requests.exceptions.HTTPError(response=mock_response)
             
-            with pytest.raises(requests.exceptions.HTTPError):
+            with pytest.raises(KoneksiGagal):
                 client.sync_absensi([])
 
     def test_http_500_server_error(self):
-        """Test handling of 500 Server Error."""
+        """Test handling of 500 Server Error — should raise KoneksiGagal."""
+        from app.api.client import KoneksiGagal
         client = ApiClient(
             "https://example.com",
             "test-device",
@@ -70,7 +73,7 @@ class TestApiClientErrorHandling:
             mock_response.text = "Internal Server Error"
             mock_post.side_effect = requests.exceptions.HTTPError(response=mock_response)
             
-            with pytest.raises(requests.exceptions.HTTPError):
+            with pytest.raises(KoneksiGagal):
                 client.sync_absensi([])
 
 
