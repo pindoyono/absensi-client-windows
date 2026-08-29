@@ -16,6 +16,10 @@ import sys
 from datetime import time as dtime
 from pathlib import Path
 
+# Konfigurasi BLAS/threading WAJIB sebelum NumPy pertama kali di-load,
+# supaya cosine distance & matmul berjalan multi-threaded di Windows.
+import app.blas_config  # noqa: F401
+
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from app.api.client import ApiClient
@@ -134,10 +138,30 @@ def main() -> int:
             settings.server_url,
             settings.device_id,
             settings.device_api_key,
-            service_jwt=settings.guru_service_jwt,
             audit_logger=audit_logger,
         )
-        
+
+        # Setup sync service (dibutuhkan oleh kiosk window & admin panel)
+        logger.info("Initializing sync service...")
+        sync_service = SyncService(repo, api, audit_logger=audit_logger)
+
+        # Bersihkan embedding lama yang tidak cocok FACE_ENCRYPTION_KEY baru.
+        # Kalau kunci di .env diganti, embedding terenkripsi kunci lama tidak
+        # bisa didekripsi → matcher buang CPU + penuh error tiap frame. Hapus,
+        # lalu reset watermark tarik-ulang supaya sync berikutnya ambil ulang
+        # SEMUA embedding dari server (dienkripsi kunci baru).
+        if settings.face_encryption_key:
+            try:
+                n_rusak = repo.hapus_embedding_tidak_sesuai_kunci(settings.face_encryption_key)
+                if n_rusak:
+                    repo.reset_metadata_tarik_embedding()
+                    logger.warning(
+                        "FACE_ENCRYPTION_KEY baru: %d embedding lama dihapus, "
+                        "akan ditarik ulang dari server di siklus sync berikutnya.", n_rusak
+                    )
+            except Exception as e:
+                logger.warning("Gagal bersihkan embedding tidak sesuai kunci: %s", e)
+
         # Create kiosk window
         logger.info("Creating kiosk window...")
         window = KioskWindow(
@@ -149,6 +173,7 @@ def main() -> int:
             jam_pulang_standar=dtime(15, 0),
             gunakan_kamera=True,
             audit_logger=audit_logger,
+            sync_service=sync_service,
         )
         window.resize(1024, 768)
         
@@ -163,13 +188,15 @@ def main() -> int:
         
         # Setup sync worker
         logger.info(f"Starting sync worker (interval: {settings.sync_interval_seconds}s)...")
-        sync_service = SyncService(repo, api, audit_logger=audit_logger)
         sync_worker = SyncWorker(
             sync_service,
             interval_detik=settings.sync_interval_seconds,
         )
         sync_worker.siklus_selesai.connect(
             lambda ringkasan: window.set_status_online(ringkasan.online)
+        )
+        sync_worker.siklus_selesai.connect(
+            lambda ringkasan: window.set_sync_status(ringkasan)
         )
         sync_worker.start()
         

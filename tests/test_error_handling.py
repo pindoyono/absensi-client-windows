@@ -77,45 +77,6 @@ class TestApiClientErrorHandling:
                 client.sync_absensi([])
 
 
-class TestJwtRefresh:
-    """Test JWT auto-refresh functionality (REQ-CRED-001)."""
-
-    def test_jwt_refresh_scheduled(self):
-        """Test that JWT refresh is scheduled on initialization."""
-        # Valid JWT token (exp in future)
-        import jwt as pyjwt
-        import time
-        
-        payload = {"exp": int(time.time()) + 7200}  # 2 hours from now
-        token = pyjwt.encode(payload, "secret", algorithm="HS256")
-        
-        with patch.object(ApiClient, "_schedule_jwt_refresh") as mock_schedule:
-            client = ApiClient(
-                "https://example.com",
-                "test-device",
-                "test-key",
-                service_jwt=token,
-            )
-            mock_schedule.assert_called_once()
-
-    def test_jwt_refresh_on_expiry_near(self):
-        """Test that refresh is triggered when JWT is about to expire."""
-        import jwt as pyjwt
-        import time
-        
-        # Token expiring in 30 minutes (should schedule refresh in 1 hour, but it's sooner)
-        payload = {"exp": int(time.time()) + 1800}
-        token = pyjwt.encode(payload, "secret", algorithm="HS256")
-        
-        client = ApiClient(
-            "https://example.com",
-            "test-device",
-            "test-key",
-            service_jwt=token,
-        )
-        
-        # Timer should be scheduled, duration should be positive
-        assert client.jwt_refresh_timer is not None
 
 
 class TestConnectionRetry:

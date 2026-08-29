@@ -22,7 +22,10 @@ logger = logging.getLogger(__name__)
 #   - FPR (False Positive Rate) = 0.4% — block spoofing
 # 
 # ROC curve & confusion matrix available in: docs/CALIBRATION_REPORT.md
-# Last calibration: 2026-09-XX
+# Last calibration: 2026-08-28
+# ⚠️ STATUS: placeholder — belum diverifikasi dengan data lapangan nyata.
+# Lihat docs/CALIBRATION_REPORT.md. Jangan gunakan untuk pilot sebelum
+# on-site testing selesai (REQ-EMBEDDING-004).
 # 
 # UPDATE PROCEDURE:
 # 1. Collect new spoofing dataset (20+ samples)
@@ -36,7 +39,7 @@ CALIBRATION_TPR = 0.985  # 98.5%
 CALIBRATION_FPR = 0.004  # 0.4%
 CALIBRATION_FRR = 0.015  # 1.5% (false reject rate)
 CALIBRATION_DATASET_SIZE = 40
-CALIBRATION_NOTES = "40 samples: 20 real faces + 20 spoofing attempts"
+CALIBRATION_NOTES = "40 samples: 20 real faces + 20 spoofing attempts — PENDING field verification"
 
 # Indeks kelas "wajah asli" pada output model.
 # Hasil verifikasi webcam fisik di proyek ini menunjukkan kelas "live"
@@ -246,7 +249,8 @@ class MiniFASNetEngine(FaceEngine):
                             wajah_terdeteksi=True,
                             lolos_liveness=False,
                             embedding=None,
-                            alasan_gagal=f"Terdeteksi spoofing (skor: {real_score:.3f}, ambang: {AMBANG_LIVENESS:.3f})"
+                            alasan_gagal=f"Terdeteksi spoofing (skor: {real_score:.3f}, ambang: {AMBANG_LIVENESS:.3f})",
+                            skor_liveness=real_score,
                         )
                 except Exception as e:
                     logger.error(f"Liveness check error: {e}", exc_info=True)
@@ -278,7 +282,8 @@ class MiniFASNetEngine(FaceEngine):
                     wajah_terdeteksi=True,
                     lolos_liveness=True,
                     embedding=embedding,
-                    alasan_gagal=None
+                    alasan_gagal=None,
+                    skor_liveness=real_score if not skip_liveness else None,
                 )
             except Exception as e:
                 logger.error(f"Embedding generation error: {e}", exc_info=True)

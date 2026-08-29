@@ -2,7 +2,7 @@ import pytest
 import requests.exceptions
 import responses
 
-from app.api.client import ApiClient, KoneksiGagal, LayananJadwalBelumSiap
+from app.api.client import ApiClient, KoneksiGagal
 from app.database.repository import RekamanAbsensi
 
 
@@ -82,23 +82,18 @@ def test_tarik_embedding_header_device_id():
     assert req.headers["X-Device-Api-Key"] == "key1"
 
 
-def test_tarik_jadwal_tanpa_service_jwt_raise_error_jelas():
-    api = ApiClient(BASE_URL, "dev1", "key1")  # service_jwt tidak diisi
-    with pytest.raises(LayananJadwalBelumSiap):
-        api.tarik_jadwal_efektif("XI Elektronika")
-
-
 @responses.activate
-def test_tarik_jadwal_dengan_service_jwt_terkirim_benar():
+def test_tarik_jadwal_dengan_device_api_key_terkirim_benar():
     responses.add(
         responses.GET, f"{BASE_URL}/jadwal/efektif",
         json={"sumber": "standar", "jam_masuk": "07:00:00", "jam_pulang": "15:00:00"},
         status=200,
     )
-    api = ApiClient(BASE_URL, "dev1", "key1", service_jwt="token-layanan-xyz")
+    api = ApiClient(BASE_URL, "dev1", "key1")
     hasil = api.tarik_jadwal_efektif("XI Elektronika")
 
     assert hasil["jam_masuk"] == "07:00:00"
     req = responses.calls[0].request
-    assert req.headers["Authorization"] == "Bearer token-layanan-xyz"
+    assert req.headers["X-Device-Id"] == "dev1"
+    assert req.headers["X-Device-Api-Key"] == "key1"
     assert "kelas=XI" in req.url

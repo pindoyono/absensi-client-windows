@@ -33,8 +33,26 @@ CREATE TABLE IF NOT EXISTS jadwal_cache (
     ditarik_pada TEXT NOT NULL
 );
 
+-- Override jadwal yang dibuat DI DEVICE (offline-first, Opsi C).
+-- Saat online, baris ini di-push ke server (POST /jadwal/override) lalu
+-- ditandai terkirim=1. Kadaluarsa otomatis: baris dengan tanggal < hari ini
+-- dibersihkan (lihat repository.buang_jadwal_lokal_kadaluarsa).
+CREATE TABLE IF NOT EXISTS jadwal_override_lokal (
+    id TEXT PRIMARY KEY, -- UUID, idempotency key untuk push ke server
+    tanggal TEXT NOT NULL,
+    kelas TEXT, -- NULL = berlaku semua kelas
+    jam_masuk TEXT NOT NULL,
+    jam_pulang TEXT NOT NULL,
+    alasan TEXT,
+    dibuat_pada TEXT NOT NULL,
+    terkirim INTEGER NOT NULL DEFAULT 0, -- 1 = tidak perlu push lagi (ok ATAU ditolak permanen)
+    status_push TEXT NOT NULL DEFAULT 'pending', -- 'pending' | 'ok' | 'ditolak'
+    pesan_push TEXT -- pesan error kalau status 'ditolak'
+);
+
 -- Absensi yang tercatat DI DEVICE INI — ini yang jadi antrian sync.
 -- record_id dibuat di client (UUID), inilah idempotency key ke server.
+
 
 CREATE TABLE IF NOT EXISTS absensi_lokal (
     record_id TEXT PRIMARY KEY,
@@ -85,56 +103,59 @@ CREATE TABLE IF NOT EXISTS dispensasi_cache (
 -- ============================================================
 CREATE TABLE IF NOT EXISTS device_audit_log (
     log_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp TEXT NOT NULL,  -- ISO 8601 format
-    event_type TEXT NOT NULL,  -- LOGIN, LOGOUT, ENROLLMENT, SYNC_START, SYNC_COMPLETE, SYNC_FAIL, ATTENDANCE_RECORD, CONFIG_CHANGE, ERROR
-    actor TEXT,  -- email (untuk OAuth) atau 'system'
-    action TEXT NOT NULL,  -- deskripsi action
-    details TEXT,  -- JSON string dengan extra details
-    status TEXT NOT NULL,  -- 'success', 'failed'
-    error_message TEXT,  -- jika ada error
+    timestamp TEXT NOT NULL, -- ISO 8601 format
+    event_type TEXT NOT NULL, -- LOGIN, LOGOUT, ENROLLMENT, SYNC_START, SYNC_COMPLETE, SYNC_FAIL, ATTENDANCE_RECORD, CONFIG_CHANGE, ERROR
+    actor TEXT, -- email (untuk OAuth) atau 'system'
+    action TEXT NOT NULL, -- deskripsi action
+    details TEXT, -- JSON string dengan extra details
+    status TEXT NOT NULL, -- 'success', 'failed'
+    error_message TEXT, -- jika ada error
     device_id TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON device_audit_log(timestamp DESC);
-CREATE INDEX IF NOT EXISTS idx_audit_event_type ON device_audit_log(event_type);
+CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON device_audit_log (timestamp DESC);
+
+CREATE INDEX IF NOT EXISTS idx_audit_event_type ON device_audit_log (event_type);
 
 -- ============================================================
 -- LIVENESS-004: Liveness Log Table — track setiap liveness check
 -- ============================================================
 CREATE TABLE IF NOT EXISTS liveness_log (
     log_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp TEXT NOT NULL,  -- ISO 8601 format
-    frame_id TEXT,  -- unique frame identifier (untuk debugging)
-    wajah_terdeteksi INTEGER NOT NULL,  -- 0 atau 1
-    is_real INTEGER,  -- 0=fake, 1=real (NULL jika wajah tidak terdeteksi)
-    liveness_score REAL,  -- skor liveness dari model
-    ambang_saat_itu REAL NOT NULL,  -- AMBANG_LIVENESS yang dipakai saat itu
-    alasan_gagal TEXT,  -- error message jika ada
-    siswa_id INTEGER,  -- jika matching berhasil, NULL kalau gagal
+    timestamp TEXT NOT NULL, -- ISO 8601 format
+    frame_id TEXT, -- unique frame identifier (untuk debugging)
+    wajah_terdeteksi INTEGER NOT NULL, -- 0 atau 1
+    is_real INTEGER, -- 0=fake, 1=real (NULL jika wajah tidak terdeteksi)
+    liveness_score REAL, -- skor liveness dari model
+    ambang_saat_itu REAL NOT NULL, -- AMBANG_LIVENESS yang dipakai saat itu
+    alasan_gagal TEXT, -- error message jika ada
+    siswa_id INTEGER, -- jika matching berhasil, NULL kalau gagal
     device_id TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_liveness_timestamp ON liveness_log(timestamp DESC);
-CREATE INDEX IF NOT EXISTS idx_liveness_wajah_terdeteksi ON liveness_log(wajah_terdeteksi);
+CREATE INDEX IF NOT EXISTS idx_liveness_timestamp ON liveness_log (timestamp DESC);
+
+CREATE INDEX IF NOT EXISTS idx_liveness_wajah_terdeteksi ON liveness_log (wajah_terdeteksi);
 
 -- ============================================================
 -- OPS-002: Sync Event Log — track setiap sync cycle
 -- ============================================================
 CREATE TABLE IF NOT EXISTS sync_event_log (
     log_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp TEXT NOT NULL,  -- waktu sync dimulai
-    duration_ms INTEGER,  -- durasi sync dalam milliseconds
-    status TEXT NOT NULL,  -- 'success', 'partial', 'failed'
-    batch_count INTEGER,  -- jumlah records di-sync
-    success_count INTEGER,  -- jumlah berhasil
-    duplicate_count INTEGER,  -- jumlah duplikat
-    fail_count INTEGER,  -- jumlah gagal
-    error_message TEXT,  -- error message jika ada
+    timestamp TEXT NOT NULL, -- waktu sync dimulai
+    duration_ms INTEGER, -- durasi sync dalam milliseconds
+    status TEXT NOT NULL, -- 'success', 'partial', 'failed'
+    batch_count INTEGER, -- jumlah records di-sync
+    success_count INTEGER, -- jumlah berhasil
+    duplicate_count INTEGER, -- jumlah duplikat
+    fail_count INTEGER, -- jumlah gagal
+    error_message TEXT, -- error message jika ada
     device_id TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_sync_event_timestamp ON sync_event_log(timestamp DESC);
-CREATE INDEX IF NOT EXISTS idx_sync_event_status ON sync_event_log(status);
+CREATE INDEX IF NOT EXISTS idx_sync_event_timestamp ON sync_event_log (timestamp DESC);
+
+CREATE INDEX IF NOT EXISTS idx_sync_event_status ON sync_event_log (status);

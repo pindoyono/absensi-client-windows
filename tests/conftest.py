@@ -5,6 +5,9 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+# Konfigurasi BLAS/threading sebelum NumPy di-load di test
+import app.blas_config  # noqa: F401
+
 
 @pytest.fixture()
 def db_path(tmp_path):

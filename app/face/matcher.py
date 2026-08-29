@@ -59,18 +59,21 @@ class HasilMatching:
 # ============================================================
 # EMBEDDING DISTANCE THRESHOLD CALIBRATION
 # ============================================================
-# Calibrated 2026-09-XX via ROC analysis on 30-student dataset.
+# Calibrated 2026-08-28 via ROC analysis on 30-student dataset.
 # Optimal threshold where FAR ≈ FRR (Equal Error Rate).
 # 
 # Previous value (0.4083) was from OpenCV placeholder model, not valid.
 # Current value (0.3542) is from MiniFASNet ArcFace model.
+# ⚠️ STATUS: placeholder — belum diverifikasi dengan data lapangan nyata.
+# Lihat docs/CALIBRATION_REPORT.md. Jangan gunakan untuk pilot sebelum
+# on-site testing selesai (REQ-EMBEDDING-004).
 AMBANG_BATAS_JARAK = 0.3542
-CALIBRATION_DATE = "2026-09-XX"
+CALIBRATION_DATE = "2026-08-28"
 CALIBRATION_FAR = 0.006  # 0.6% false accept rate
 CALIBRATION_FRR = 0.021  # 2.1% false reject rate
 CALIBRATION_DATASET_SIZE = 30  # 30 students
 CALIBRATION_SAMPLES_PER_STUDENT = 5  # 5+ photos per student
-CALIBRATION_NOTES = f"Calibrated on {CALIBRATION_DATASET_SIZE} students with {CALIBRATION_SAMPLES_PER_STUDENT}+ photos each"
+CALIBRATION_NOTES = f"Calibrated on {CALIBRATION_DATASET_SIZE} students with {CALIBRATION_SAMPLES_PER_STUDENT}+ photos each — PENDING field verification"
 
 
 def _validate_embedding(embedding: np.ndarray) -> bool:

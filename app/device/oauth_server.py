@@ -53,11 +53,8 @@ ENV_FILE = DATA_DIR / ".env"
 # ═══════════════════════════════════════════════════════════════
 
 
-DEFAULT_CLIENT_ID = "726713411026-ugpcekftqkj7qna8ov3vcv1lgkoid8nu.apps.googleusercontent.com"
-
-
 def get_client_id() -> str:
-    """Ambil Google Client ID dari env, config, atau default."""
+    """Ambil Google Client ID dari env atau config."""
     cid = os.environ.get("GOOGLE_CLIENT_ID", "")
     if cid:
         return cid
@@ -68,7 +65,7 @@ def get_client_id() -> str:
             return cid
     except Exception:
         pass
-    return DEFAULT_CLIENT_ID
+    return ""
 
 
 def _generate_pkce_pair() -> tuple[str, str]:
@@ -121,6 +118,9 @@ class _OAuthCallbackHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
             msg = urllib.parse.unquote_plus(params.get("error_description", ["Unknown error"])[0])
+            # Escape HTML untuk cegah XSS
+            import html as _html
+            msg = _html.escape(msg)
             self.wfile.write(
                 f"<html><body style='font-family:sans-serif;text-align:center;padding:60px;'>"
                 f"<h1>&#x274C; Login Gagal</h1><p>{msg}</p></body></html>".encode()

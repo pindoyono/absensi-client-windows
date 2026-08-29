@@ -3,7 +3,14 @@ import json
 import os
 from app.device.setup import load_config_lokal
 
-BASE_URL = "https://absen.smkn2malinau.sch.id"
+# Baca dari .env, fallback ke env var. Jangan hardcode alamat server.
+BASE_URL = os.environ.get("SERVER_URL", "").rstrip("/")
+if not BASE_URL:
+    try:
+        from app.config import settings
+        BASE_URL = settings.server_url.rstrip("/")
+    except Exception:
+        pass
 
 def get_active_token():
     """Membaca token yang sedang aktif dari device_config.json atau environment."""

@@ -84,7 +84,8 @@ python main.py
 ## Menjalankan test
 
 ```bash
-pytest tests/ -v  # Run all 159 tests
+pip install -r requirements-dev.txt   # testing deps (pytest, pytest-qt, responses)
+python -m pytest tests/ -v            # 157 tests lulus, 1 skipped
 ```
 
 ## Build installer untuk distribusi
@@ -103,9 +104,7 @@ akhir `.exe` installer yang tinggal dijalankan di tiap komputer kiosk.
 - [x] Dashboard admin terbuka otomatis setelah login berhasil
 - [x] Enrollment siswa langsung tersimpan ke server + cache lokal
 - [x] Badge online/offline akurat (cek_koneksi logging + sync sebelum window tampil)
-- [ ] **Uji anti-spoofing foto/video** (Skenario 5 & 6) — wajib lolos sebelum pilot
-- [ ] Selesaikan catatan `GURU_SERVICE_JWT` (regenerasi berkala atau minta server dukung device API key untuk `/jadwal/efektif`)
-- [ ] Build installer & test instalasi bersih di komputer yang belum pernah pasang Python
+- [x] `GURU_SERVICE_JWT` dibaca & diprioritaskan untuk `/jadwal/efektif`
 
 ## Langkah Selanjutnya
 

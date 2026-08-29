@@ -5,19 +5,20 @@ dan Pengaturan Lainnya.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, date
 import cv2
 import numpy as np
 import requests
 import webbrowser
 
 logger = logging.getLogger(__name__)
-from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtCore import Qt, QTimer, Signal, QThread
+from PySide6.QtGui import QImage, QPixmap, QColor
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
     QPushButton, QLineEdit, QStackedWidget, QTableWidget, QTableWidgetItem,
     QHeaderView, QMessageBox, QFormLayout, QGridLayout, QTextEdit,
+    QListWidget, QListWidgetItem, QProgressBar, QInputDialog, QScrollArea,
 )
 
 from app.ui.styles import WARNA
@@ -163,11 +164,22 @@ class LoginScreen(QWidget):
         nama_lokasi = self.input_lokasi.text().strip() or "Gerbang Utama"
 
         def _run():
-            hasil = mulai_google_oauth_flow_sync(
-                server_url=server_url,
-                device_id=device_id,
-                nama_lokasi=nama_lokasi,
-            )
+            try:
+                hasil = mulai_google_oauth_flow_sync(
+                    server_url=server_url,
+                    device_id=device_id,
+                    nama_lokasi=nama_lokasi,
+                )
+                logger.info(
+                    "OAuth flow selesai: success=%s, error=%s, api_key=%s",
+                    hasil.success, hasil.error or "-", bool(hasil.api_key),
+                )
+            except Exception as e:
+                import traceback
+                logger.error("OAuth flow gagal: %s\n%s", e, traceback.format_exc())
+                hasil = LoginResult()
+                hasil.success = False
+                hasil.error = f"Login gagal: {e}"
             # Gunakan QMetaObject.invokeMethod agar callback dijalankan di GUI thread
             from PySide6.QtCore import QMetaObject, Q_ARG, Qt as QtConst
             if hasil.success:
@@ -243,9 +255,11 @@ class AdminWindow(QMainWindow):
     logout_admin = Signal()
     login_sukses_signal = Signal()
     window_closed = Signal()
+    jadwal_refresh_selesai = Signal(object, object, str)
 
     def __init__(self, engine: MiniFASNetEngine, repo: AbsensiRepository,
-                 server_url: str, face_encryption_key: str, device_id: str):
+                 server_url: str, face_encryption_key: str, device_id: str,
+                 bypass_login: bool = False, sync_service=None, dashboard_url: str = ""):
         super().__init__()
         self.setWindowTitle("Panel Admin & Guru Piket — Absensi")
         self.resize(1000, 650)
@@ -253,9 +267,11 @@ class AdminWindow(QMainWindow):
 
         # Simpan atribut instance untuk dipakai di seluruh method
         self.server_url = server_url
+        self.dashboard_url = dashboard_url or server_url
         self.device_id = device_id
         self.face_encryption_key = face_encryption_key
         self.repo = repo
+        self.sync_service = sync_service
 
         # Cek apakah device sudah terdaftar & user sudah login (JWT valid)
         config = load_config_lokal()
@@ -266,9 +282,18 @@ class AdminWindow(QMainWindow):
         )
         sudah_login = sudah_terdaftar and self._cek_jwt_valid(config.get("jwt_token", ""))
 
-        if sudah_login:
+        if bypass_login:
+            # Dibuka lewat password panel (⚙️ Panel Admin) — langsung ke
+            # dashboard tanpa login Google. jwt_token diambil dari config
+            # kalau ada (untuk fitur yang butuh server); kalau kosong,
+            # fitur enrollment/jadwal akan minta login terpisah.
+            role = config.get("role", "admin")
+            self.jwt_token = config.get("jwt_token", "")
+            self._build_dashboard_ui(engine, repo, face_encryption_key, role, server_url)
+        elif sudah_login:
             # Langsung ke dashboard
             role = config.get("role", "guru_piket")
+            self.jwt_token = config.get("jwt_token", "")
             self._build_dashboard_ui(engine, repo, face_encryption_key, role, server_url)
         else:
             # Tampilkan login screen
@@ -280,15 +305,24 @@ class AdminWindow(QMainWindow):
 
     @staticmethod
     def _cek_jwt_valid(jwt_token: str) -> bool:
-        """Cek apakah JWT masih valid (belum expired)."""
+        """Cek apakah JWT masih valid (belum expired) dan signature cocok
+        dengan secret server. Secret diambil dari config lokal — kalau
+        tidak tersedia, token dianggap TIDAK valid (fail-closed)."""
         if not jwt_token:
             return False
         try:
-            import jwt
-            payload = jwt.decode(jwt_token, options={"verify_signature": False})
-            exp = payload.get("exp", 0)
-            import time
-            return exp > time.time()
+            import jwt, time
+            from app.config import settings
+            secret = settings.jwt_secret
+            if not secret:
+                return False
+            payload = jwt.decode(
+                jwt_token,
+                key=secret,
+                algorithms=["HS256"],
+                options={"verify_exp": True},
+            )
+            return payload.get("exp", 0) > time.time()
         except Exception:
             return False
 
@@ -306,30 +340,30 @@ class AdminWindow(QMainWindow):
 
     def _on_login_success(self, token, engine, repo, server_url, face_encryption_key, device_id):
         """Setelah login berhasil, bangun dashboard admin."""
+        logger.info("_on_login_success dipanggil, token=%s...", (token or "")[:10])
         try:
             config = load_config_lokal()
             self.jwt_token = config.get("jwt_token", "")
             self.server_url = server_url
             role = config.get("role", "guru_piket")
             self._build_dashboard_ui(engine, repo, face_encryption_key, role, server_url)
+            logger.info("Dashboard admin berhasil dibangun (role=%s)", role)
             self.setWindowTitle(f"Panel Admin — {device_id} ({role})")
             self.login_sukses_signal.emit()
-            
-            # Force to front
+
+            # Kiosk berjalan fullscreen — panel admin harus TETAP di atas
+            # window kiosk. Jangan pernah melepas flag StaysOnTop selama
+            # panel terbuka, kalau tidak panel jatuh ke belakang kiosk
+            # dan terlihat seperti "tidak terbuka".
             self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
-            self.setWindowState(self.windowState() & ~Qt.WindowMinimized | Qt.WindowActive)
             self.show()
             self.raise_()
             self.activateWindow()
-            
-            # Kembalikan ke normal setelah muncul agar tidak mengganggu dialog lain
-            QTimer.singleShot(1000, lambda: self.setWindowFlags(self.windowFlags() & ~Qt.WindowStaysOnTopHint))
-            QTimer.singleShot(1100, self.show) 
-            
+
             logger.debug("done")
         except Exception as e:
             import traceback
-            traceback.print_exc()
+            logger.error("Gagal membuka dashboard admin: %s\n%s", e, traceback.format_exc())
             QMessageBox.critical(self, "Error", f"Gagal membuka dashboard: {str(e)}")
 
     def _build_dashboard_ui(self, engine, repo, face_encryption_key, role="guru_piket", server_url=""):
@@ -387,7 +421,12 @@ class AdminWindow(QMainWindow):
             side_layout.addWidget(self.btn_nav_jadwal)
             self.jadwal_screen = QWidget()
             self._build_jadwal_ui(self.jadwal_screen, server_url)
-            self.stack.addWidget(self.jadwal_screen)
+            # Bungkus dalam scroll area supaya tidak numpuk saat fullscreen
+            jadwal_scroll = QScrollArea()
+            jadwal_scroll.setWidgetResizable(True)
+            jadwal_scroll.setWidget(self.jadwal_screen)
+            jadwal_scroll.setFrameShape(QFrame.NoFrame)
+            self.stack.addWidget(jadwal_scroll)
             idx += 1
 
             # 4. Pengaturan Guru — admin only
@@ -460,8 +499,40 @@ class AdminWindow(QMainWindow):
         judul.setStyleSheet("font-size: 20px; font-weight: 600;")
         layout.addWidget(judul)
 
+        # --- Pencarian siswa dari server (pilih berdasarkan NISN atau nama) ---
+        box_cari = QFrame()
+        box_cari.setStyleSheet(f"background-color: {WARNA['surface']}; border: 1px solid {WARNA['border']}; border-radius: 8px;")
+        lay_cari = QVBoxLayout(box_cari)
+        lay_cari.setContentsMargins(16, 12, 16, 12)
+        lay_cari.setSpacing(8)
+
+        lbl_cari = QLabel("🔎 Cari siswa dari server (NISN / Nama)")
+        lbl_cari.setStyleSheet("font-size: 13px; font-weight: 600;")
+        lay_cari.addWidget(lbl_cari)
+
+        row_cari = QHBoxLayout()
+        self.input_cari = QLineEdit()
+        self.input_cari.setPlaceholderText("Ketik NISN atau nama siswa…")
+        self.input_cari.textChanged.connect(self._filter_daftar_siswa)
+        row_cari.addWidget(self.input_cari, 1)
+
+        self.btn_muat_siswa = QPushButton("🔄 Muat dari Server")
+        self.btn_muat_siswa.clicked.connect(self._muat_daftar_siswa)
+        row_cari.addWidget(self.btn_muat_siswa)
+        lay_cari.addLayout(row_cari)
+
+        self.list_siswa = QListWidget()
+        self.list_siswa.setMaximumHeight(140)
+        self.list_siswa.itemClicked.connect(self._pilih_siswa_dari_list)
+        lay_cari.addWidget(self.list_siswa)
+
+        self.lbl_hasil_cari = QLabel("")
+        self.lbl_hasil_cari.setStyleSheet(f"font-size: 12px; color: {WARNA['teks_sekunder']};")
+        lay_cari.addWidget(self.lbl_hasil_cari)
+        layout.addWidget(box_cari)
+
         form = QHBoxLayout()
-        self.input_nis = QLineEdit(); self.input_nis.setPlaceholderText("NIS / NISN")
+        self.input_nis = QLineEdit(); self.input_nis.setPlaceholderText("NISN")
         self.input_nama = QLineEdit(); self.input_nama.setPlaceholderText("Nama Lengkap")
         self.input_kelas = QLineEdit(); self.input_kelas.setPlaceholderText("Kelas (XI RPL 1)")
         form.addWidget(self.input_nis); form.addWidget(self.input_nama); form.addWidget(self.input_kelas)
@@ -492,6 +563,57 @@ class AdminWindow(QMainWindow):
         rp.addStretch()
         mid.addLayout(rp)
         layout.addLayout(mid)
+
+    def _muat_daftar_siswa(self):
+        """Muat daftar siswa dari server (GET /siswa) untuk dipilih saat enroll."""
+        if not self.jwt_token:
+            self.lbl_hasil_cari.setText("❌ Sesi login tidak valid, silakan login ulang.")
+            return
+        self.btn_muat_siswa.setEnabled(False)
+        self.lbl_hasil_cari.setText("⏳ Memuat daftar siswa dari server…")
+        try:
+            headers = {"Authorization": f"Bearer {self.jwt_token}"}
+            resp = requests.get(f"{self.server_url}/siswa", headers=headers, timeout=15)
+            resp.raise_for_status()
+            self._daftar_siswa_server = resp.json()
+            self._filter_daftar_siswa()
+            self.lbl_hasil_cari.setText(f"✅ {len(self._daftar_siswa_server)} siswa dimuat dari server.")
+        except requests.RequestException as e:
+            err_msg = str(e)
+            if e.response is not None:
+                err_msg = f"{e.response.status_code} {e.response.reason}: {e.response.text[:200]}"
+            logger.warning("Gagal memuat daftar siswa: %s", err_msg)
+            self.lbl_hasil_cari.setText(f"❌ Gagal memuat siswa: {err_msg}")
+        finally:
+            self.btn_muat_siswa.setEnabled(True)
+
+    def _filter_daftar_siswa(self):
+        """Filter daftar siswa berdasarkan teks pencarian (NISN atau nama)."""
+        if not hasattr(self, "_daftar_siswa_server"):
+            return
+        q = self.input_cari.text().strip().lower()
+        self.list_siswa.clear()
+        if not q:
+            self.lbl_hasil_cari.setText(f"{len(self._daftar_siswa_server)} siswa tersedia. Ketik NISN/nama untuk memfilter.")
+            return
+        cocok = [
+            s for s in self._daftar_siswa_server
+            if q in s.get("nis", "").lower() or q in s.get("nama", "").lower()
+        ]
+        for s in cocok[:50]:
+            status = "✅" if s.get("enrolled") else "⬜"
+            item = QListWidgetItem(f"{status} {s.get('nis', '')} — {s.get('nama', '')} ({s.get('kelas', '')})")
+            item.setData(Qt.UserRole, s)
+            self.list_siswa.addItem(item)
+        self.lbl_hasil_cari.setText(f"{len(cocok)} siswa cocok." if cocok else "Tidak ada siswa yang cocok.")
+
+    def _pilih_siswa_dari_list(self, item: QListWidgetItem):
+        """Isi form enroll dari siswa yang dipilih di daftar."""
+        s = item.data(Qt.UserRole)
+        self.input_nis.setText(s.get("nis", ""))
+        self.input_nama.setText(s.get("nama", ""))
+        self.input_kelas.setText(s.get("kelas", ""))
+        self.lbl_hasil_cari.setText(f"Dipilih: {s.get('nama', '')} ({s.get('kelas', '')}) — klik 'Ambil Foto & Enroll'.")
 
     def _mulai_preview_kamera(self, engine, repo, face_encryption_key):
         """Mulai live preview kamera di label_cam."""
@@ -559,7 +681,7 @@ class AdminWindow(QMainWindow):
         nama = self.input_nama.text().strip()
         kelas = self.input_kelas.text().strip()
         if not nis or not nama or not kelas:
-            self.lbl_status.setText("❌ NIS, nama, dan kelas wajib diisi.")
+            self.lbl_status.setText("❌ NISN, nama, dan kelas wajib diisi.")
             return
 
         if not self.jwt_token:
@@ -632,7 +754,7 @@ class AdminWindow(QMainWindow):
 
         self.table = QTableWidget()
         self.table.setColumnCount(4)
-        self.table.setHorizontalHeaderLabels(["ID", "NIS", "Nama", "Kelas"])
+        self.table.setHorizontalHeaderLabels(["ID", "NISN", "Nama", "Kelas"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         layout.addWidget(self.table)
 
@@ -675,6 +797,7 @@ class AdminWindow(QMainWindow):
         self.label_jadwal_status = QLabel("")
         self.label_jadwal_status.setStyleSheet(f"font-size: 12px; color: {WARNA['teks_sekunder']};")
         layout.addWidget(self.label_jadwal_status)
+        self.jadwal_refresh_selesai.connect(self._selesai_refresh_jadwal)
         layout.addSpacing(8)
 
         # --- Tabel Jadwal Standar ---
@@ -683,12 +806,16 @@ class AdminWindow(QMainWindow):
         layout.addWidget(lbl_standar)
 
         self.table_jadwal_standar = QTableWidget()
-        self.table_jadwal_standar.setColumnCount(4)
-        self.table_jadwal_standar.setHorizontalHeaderLabels(["Hari", "Kelas", "Jam Masuk", "Jam Pulang"])
+        self.table_jadwal_standar.setColumnCount(5)
+        self.table_jadwal_standar.setHorizontalHeaderLabels(
+            ["Hari", "Jam Masuk", "Jam Pulang", "Jam Efektif (Durasi)", "Aksi"]
+        )
         self.table_jadwal_standar.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table_jadwal_standar.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table_jadwal_standar.setSelectionBehavior(QTableWidget.SelectRows)
-        self.table_jadwal_standar.setMinimumHeight(200)
+        self.table_jadwal_standar.verticalHeader().setVisible(False)
+        self.table_jadwal_standar.setAlternatingRowColors(True)
+        self.table_jadwal_standar.setMinimumHeight(230)
         layout.addWidget(self.table_jadwal_standar)
 
         layout.addSpacing(16)
@@ -704,23 +831,60 @@ class AdminWindow(QMainWindow):
         self.table_jadwal_override.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table_jadwal_override.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table_jadwal_override.setSelectionBehavior(QTableWidget.SelectRows)
-        self.table_jadwal_override.setMinimumHeight(200)
+        self.table_jadwal_override.verticalHeader().setVisible(False)
+        self.table_jadwal_override.setAlternatingRowColors(True)
+        self.table_jadwal_override.setMinimumHeight(230)
         layout.addWidget(self.table_jadwal_override)
+
+        layout.addSpacing(16)
+
+        # --- Override Lokal (offline-first, Opsi C) ---
+        lbl_lokal = QLabel("🔄 Override Jadwal Lokal (Dibuat di Device — Berlaku Offline)")
+        lbl_lokal.setStyleSheet("font-size: 15px; font-weight: 600; padding-bottom: 4px;")
+        layout.addWidget(lbl_lokal)
+
+        self.table_jadwal_lokal = QTableWidget()
+        self.table_jadwal_lokal.setColumnCount(6)
+        self.table_jadwal_lokal.setHorizontalHeaderLabels(
+            ["Tanggal", "Kelas", "Jam Masuk", "Jam Pulang", "Status", "Aksi"]
+        )
+        self.table_jadwal_lokal.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table_jadwal_lokal.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table_jadwal_lokal.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table_jadwal_lokal.verticalHeader().setVisible(False)
+        self.table_jadwal_lokal.setAlternatingRowColors(True)
+        self.table_jadwal_lokal.setMinimumHeight(150)
+        layout.addWidget(self.table_jadwal_lokal)
+
+        btn_tambah_lokal = QPushButton("➕ Tambah Override Lokal (Offline)")
+        btn_tambah_lokal.clicked.connect(self._tambah_override_lokal_dialog)
+        layout.addWidget(btn_tambah_lokal)
+
+        btn_reset_push = QPushButton("🔁 Reset Status Push (Coba Ulang yang Ditolak)")
+        btn_reset_push.setToolTip(
+            "Reset override yang statusnya '✗ server menolak' menjadi '⏳ menunggu sync' "
+            "supaya dicoba push ulang di siklus sync berikutnya. "
+            "Pakai setelah server di-patch endpoint POST /jadwal/override untuk device."
+        )
+        btn_reset_push.clicked.connect(self._reset_status_push)
+        layout.addWidget(btn_reset_push)
 
         layout.addStretch()
 
         # Link ke web dashboard
         btn_web = QPushButton("🌐 Buka Dashboard Web untuk Pengaturan Lengkap")
-        btn_web.clicked.connect(lambda: webbrowser.open(f"{server_url}/dashboard/jadwal"))
+        btn_web.clicked.connect(lambda: webbrowser.open(f"{self.dashboard_url}/dashboard/jadwal"))
         layout.addWidget(btn_web)
 
     def _load_jadwal_data(self):
-        """Muat data jadwal: baca cache lokal (langsung) + refresh server (thread)."""
+        """Tampilkan jadwal server; cache hanya dipakai sebagai fallback offline."""
         import logging
         _log = logging.getLogger(__name__)
 
         self.btn_refresh_jadwal.setEnabled(False)
         self.btn_refresh_jadwal.setText("⏳ Memuat...")
+        self.label_jadwal_status.setText("⏳ Mengambil jadwal standar dan override dari server...")
+        self.label_jadwal_status.setStyleSheet(f"font-size: 12px; color: {WARNA['warning_teks']};")
 
         # Langsung baca cache lokal (cepat, di main thread)
         standar = []
@@ -741,99 +905,129 @@ class AdminWindow(QMainWindow):
         except Exception as e:
             _log.warning("Gagal baca jadwal_cache: %s", e)
 
-        if standar or override:
-            self.label_jadwal_status.setText(f"📋 {len(standar)} standar, {len(override)} override — sedang refresh dari server...")
-            self.label_jadwal_status.setStyleSheet(f"font-size: 12px; color: {WARNA['teks_sekunder']};")
-        else:
-            self.label_jadwal_status.setText("📭 Belum ada cache — sedang ambil dari server...")
-            self.label_jadwal_status.setStyleSheet(f"font-size: 12px; color: {WARNA['teks_sekunder']};")
+        self._isi_tabel_jadwal([], [])
+        self._jadwal_cache_standar = standar
+        self._jadwal_cache_override = override
 
-        self._isi_tabel_jadwal(standar, override)
-
-        # Background: fetch jadwal efektif per kelas langsung (bukan siklus sync penuh)
+        # Background: fetch jadwal dari server (bukan siklus sync penuh)
         import threading
-        def _refresh():
+
+        # Pastikan jwt_token ada, fallback baca dari config lokal
+        jwt_token = getattr(self, "jwt_token", "") or load_config_lokal().get("jwt_token", "")
+
+        def _refresh(token):
             err = None
             try:
-                from app.api.client import ApiClient
-                config = load_config_lokal()
-                jwt = config.get("jwt_token", "")
-                if not jwt:
-                    return
-                api = ApiClient(
-                    base_url=self.server_url, device_id=self.device_id,
-                    api_key=config.get("api_key", ""), service_jwt=jwt,
+                if not token:
+                    raise Exception("JWT token tidak ditemukan. Silakan login ulang.")
+                headers = {"Authorization": f"Bearer {token}"}
+                # Panel menampilkan konfigurasi server, bukan jadwal efektif
+                # hari ini yang tidak memiliki field hari.
+                resp_standar = requests.get(
+                    f"{self.server_url}/jadwal/standar",
+                    headers=headers, timeout=15,
                 )
-                # Buka koneksi baru untuk thread ini
-                from app.database.db import get_connection
-                from app.database.repository import AbsensiRepository
-                db = get_connection()
-                repo_bg = AbsensiRepository(db)
-                entries = []
-                for kelas in repo_bg.daftar_kelas():
-                    try:
-                        data = api.tarik_jadwal_efektif(kelas)
-                        if data and data.get("jam_masuk"):
-                            entries.append({
-                                "kelas": kelas, "jam_masuk": data["jam_masuk"],
-                                "jam_pulang": data["jam_pulang"], "sumber": data["sumber"],
-                            })
-                    except Exception:
-                        pass
-                if entries:
-                    repo_bg.replace_jadwal_cache(entries)
-                    _log.info("Jadwal cache diperbarui: %d kelas", len(entries))
-                db.close()
+                resp_standar.raise_for_status()
+                resp_override = requests.get(
+                    f"{self.server_url}/jadwal/override",
+                    headers=headers, timeout=15,
+                )
+                resp_override.raise_for_status()
+
+                standar_server = self._normalisasi_jadwal_standar(resp_standar.json())
+                override_server = self._normalisasi_jadwal_override(resp_override.json())
+                _log.info(
+                    "Jadwal server dimuat: %d standar, %d override",
+                    len(standar_server), len(override_server),
+                )
             except Exception as e:
                 err = str(e)
                 _log.warning("Refresh jadwal server gagal: %s", e)
-            QTimer.singleShot(0, lambda: _selesai_refresh(err))
+                standar_server = []
+                override_server = []
+            self.jadwal_refresh_selesai.emit(standar_server, override_server, err or "")
 
-        def _selesai_refresh(err):
-            # Re-read dari cache utama
-            standar2 = []
-            override2 = []
-            try:
-                rows2 = self.repo.conn.execute(
-                    "SELECT kelas, tanggal, hari, jam_masuk, jam_pulang, sumber "
-                    "FROM jadwal_cache ORDER BY sumber, kelas"
-                ).fetchall()
-                for r in rows2:
-                    entry = {"kelas": r["kelas"] or "Semua", "jam_masuk": r["jam_masuk"], "jam_pulang": r["jam_pulang"]}
-                    if r["sumber"] == "standar":
-                        entry["hari"] = r["hari"] or ""
-                        standar2.append(entry)
-                    else:
-                        entry["tanggal"] = r["tanggal"] or ""
-                        override2.append(entry)
-            except Exception:
-                pass
+        threading.Thread(target=_refresh, args=(jwt_token,), daemon=True).start()
 
-            self._isi_tabel_jadwal(standar2, override2)
+    def _selesai_refresh_jadwal(self, standar_server, override_server, err):
+        """Terima hasil thread refresh pada event loop main window."""
+        if err:
+            standar2 = self._jadwal_cache_standar
+            override2 = self._jadwal_cache_override
+        else:
+            standar2 = standar_server or []
+            override2 = override_server or []
+        self._isi_tabel_jadwal(standar2, override2)
 
-            total = len(standar2) + len(override2)
-            if total == 0:
-                msg = "📭 Belum ada jadwal. Pastikan siswa ter-cache dan server aktif."
-                self.label_jadwal_status.setStyleSheet(f"font-size: 12px; color: {WARNA['warning_teks']};")
-            else:
-                msg = f"✅ {len(standar2)} jadwal standar, {len(override2)} override"
-                if err:
-                    msg += f" ⚠️ ({err})"
-                self.label_jadwal_status.setStyleSheet(f"font-size: 12px; color: {WARNA['sukses_teks']};")
-            self.label_jadwal_status.setText(msg)
-            self.btn_refresh_jadwal.setEnabled(True)
-            self.btn_refresh_jadwal.setText("🔄 Refresh")
+        total = len(standar2) + len(override2)
+        if total == 0:
+            msg = "📭 Belum ada jadwal. Pastikan siswa ter-cache dan server aktif."
+            self.label_jadwal_status.setStyleSheet(f"font-size: 12px; color: {WARNA['warning_teks']};")
+        else:
+            sumber = "server" if not err else "cache lokal"
+            msg = f"✅ {len(standar2)} jadwal standar, {len(override2)} override ({sumber})"
+            if err:
+                msg += f" ⚠️ {err}"
+            warna = WARNA['sukses_teks'] if not err else WARNA['warning_teks']
+            self.label_jadwal_status.setStyleSheet(f"font-size: 12px; color: {warna};")
+        self.label_jadwal_status.setText(msg)
+        self.btn_refresh_jadwal.setEnabled(True)
+        self.btn_refresh_jadwal.setText("🔄 Refresh")
 
-        threading.Thread(target=_refresh, daemon=True).start()
+    @staticmethod
+    def _normalisasi_jadwal_standar(data):
+        """Normalisasi response GET /jadwal/standar untuk tabel per hari."""
+        if not isinstance(data, list):
+            return []
+        urutan_hari = {"SENIN": 0, "SELASA": 1, "RABU": 2, "KAMIS": 3, "JUMAT": 4, "SABTU": 5, "MINGGU": 6}
+        hasil = []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            hasil.append({
+                "hari": str(item.get("hari") or "-"),
+                "jam_masuk": str(item.get("jam_masuk") or "-"),
+                "jam_pulang": str(item.get("jam_pulang") or "-"),
+            })
+        return sorted(hasil, key=lambda item: urutan_hari.get(item["hari"].upper(), 99))
+
+    @staticmethod
+    def _durasi_jadwal(jam_masuk: str, jam_pulang: str) -> str:
+        """Hitung durasi kerja dari jam server, tanpa mengubah nilai aslinya."""
+        try:
+            masuk = datetime.strptime(jam_masuk[:8], "%H:%M:%S")
+            pulang = datetime.strptime(jam_pulang[:8], "%H:%M:%S")
+            menit = int((pulang - masuk).total_seconds() // 60)
+            if menit < 0:
+                menit += 24 * 60
+            return f"{menit // 60} jam {menit % 60} menit" if menit % 60 else f"{menit // 60} jam"
+        except (TypeError, ValueError):
+            return "-"
+
+    @staticmethod
+    def _normalisasi_jadwal_override(data):
+        """Pertahankan field override persis dari kontrak API server."""
+        if not isinstance(data, list):
+            return []
+        return [{
+            "tanggal": str(item.get("tanggal") or "-"),
+            "kelas": str(item.get("kelas") or "Semua kelas"),
+            "jam_masuk": str(item.get("jam_masuk") or "-"),
+            "jam_pulang": str(item.get("jam_pulang") or "-"),
+            "alasan": str(item.get("alasan") or "-"),
+        } for item in data if isinstance(item, dict)]
 
     def _isi_tabel_jadwal(self, standar: list[dict], override: list[dict]):
         """Isi tabel jadwal standar dan override."""
         self.table_jadwal_standar.setRowCount(len(standar))
         for i, j in enumerate(standar):
             self.table_jadwal_standar.setItem(i, 0, QTableWidgetItem(str(j.get("hari", ""))))
-            self.table_jadwal_standar.setItem(i, 1, QTableWidgetItem(str(j.get("kelas", "Semua"))))
-            self.table_jadwal_standar.setItem(i, 2, QTableWidgetItem(str(j.get("jam_masuk", ""))))
-            self.table_jadwal_standar.setItem(i, 3, QTableWidgetItem(str(j.get("jam_pulang", ""))))
+            jam_masuk = str(j.get("jam_masuk", ""))
+            jam_pulang = str(j.get("jam_pulang", ""))
+            self.table_jadwal_standar.setItem(i, 1, QTableWidgetItem(jam_masuk))
+            self.table_jadwal_standar.setItem(i, 2, QTableWidgetItem(jam_pulang))
+            self.table_jadwal_standar.setItem(i, 3, QTableWidgetItem(self._durasi_jadwal(jam_masuk, jam_pulang)))
+            self.table_jadwal_standar.setItem(i, 4, QTableWidgetItem("Edit di Dashboard Web"))
 
         self.table_jadwal_override.setRowCount(len(override))
         for i, j in enumerate(override):
@@ -843,6 +1037,131 @@ class AdminWindow(QMainWindow):
             self.table_jadwal_override.setItem(i, 3, QTableWidgetItem(str(j.get("jam_pulang", "") or "—")))
             self.table_jadwal_override.setItem(i, 4, QTableWidgetItem(str(j.get("alasan", "") or "—")))
 
+        # Muat override lokal dari DB
+        self._isi_tabel_override_lokal()
+
+    def _isi_tabel_override_lokal(self):
+        """Isi tabel override jadwal lokal (offline-first, Opsi C)."""
+        try:
+            rows = self.repo.jadwal_override_lokal_semua()
+        except Exception as e:
+            logger.warning("Gagal ambil override lokal: %s", e)
+            rows = []
+        self.table_jadwal_lokal.setRowCount(len(rows))
+        for i, r in enumerate(rows):
+            tanggal = str(r.get("tanggal", ""))
+            kelas = str(r.get("kelas") or "Semua")
+            jam_masuk = str(r.get("jam_masuk", ""))[:5]
+            jam_pulang = str(r.get("jam_pulang", ""))[:5]
+            terkirim = bool(r.get("terkirim"))
+            status_push = str(r.get("status_push") or ("ok" if terkirim else "pending"))
+            pesan_push = str(r.get("pesan_push") or "")
+            if status_push == "ok":
+                status, warna = "✓ di server", WARNA["sukses_teks"]
+            elif status_push == "ditolak":
+                status, warna = "✗ server menolak", WARNA["bahaya_teks"]
+            else:
+                status, warna = "⏳ menunggu sync", WARNA["warning_teks"]
+
+            item_tanggal = QTableWidgetItem(tanggal)
+            item_kelas = QTableWidgetItem(kelas)
+            item_masuk = QTableWidgetItem(jam_masuk)
+            item_pulang = QTableWidgetItem(jam_pulang)
+            item_status = QTableWidgetItem(status)
+            item_status.setForeground(QColor(warna))
+            if status_push == "ditolak" and pesan_push:
+                item_status.setToolTip(pesan_push)
+            for c, item in enumerate([item_tanggal, item_kelas, item_masuk, item_pulang, item_status]):
+                self.table_jadwal_lokal.setItem(i, c, item)
+
+            # Kolom aksi: hapus
+            w = QWidget()
+            lay = QHBoxLayout(w)
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.setSpacing(4)
+            override_id = r.get("id")
+            btn_hapus = QPushButton("🗑️")
+            btn_hapus.setToolTip("Hapus override lokal ini")
+            btn_hapus.clicked.connect(lambda _=False, i=override_id: self._hapus_override_lokal(i))
+            lay.addWidget(btn_hapus)
+            lay.addStretch()
+            self.table_jadwal_lokal.setCellWidget(i, 5, w)
+
+    def _tambah_override_lokal_dialog(self):
+        """Dialog tambah override jadwal lokal (berlaku offline)."""
+        tanggal, ok1 = self._input_teks("Tanggal (YYYY-MM-DD)", date.today().isoformat())
+        if not ok1:
+            return
+        kelas, ok2 = self._input_teks("Kelas (kosong = semua)", "")
+        if not ok2:
+            return
+        jam_masuk, ok3 = self._input_teks("Jam Masuk (HH:MM)", "07:00")
+        if not ok3:
+            return
+        jam_pulang, ok4 = self._input_teks("Jam Pulang (HH:MM)", "15:00")
+        if not ok4:
+            return
+        alasan, ok5 = self._input_teks("Alasan (opsional)", "")
+        if not ok5:
+            return
+        if not self._validasi_jam(jam_masuk) or not self._validasi_jam(jam_pulang):
+            QMessageBox.warning(self, "Input Salah", "Format jam harus HH:MM (contoh 07:00).")
+            return
+        self.repo.simpan_jadwal_override_lokal(
+            tanggal=tanggal, kelas=kelas or None,
+            jam_masuk=jam_masuk + ":00", jam_pulang=jam_pulang + ":00",
+            alasan=alasan or None,
+        )
+        self.label_jadwal_status.setText("✅ Override lokal disimpan. Berlaku langsung untuk absensi offline.")
+        self.label_jadwal_status.setStyleSheet(f"font-size: 12px; color: {WARNA['sukses_teks']};")
+        self._isi_tabel_override_lokal()
+
+    def _hapus_override_lokal(self, override_id: str):
+        if QMessageBox.question(
+            self, "Konfirmasi", "Hapus override lokal ini?", QMessageBox.Yes | QMessageBox.No
+        ) != QMessageBox.Yes:
+            return
+        self.repo.hapus_jadwal_override_lokal(override_id)
+        self.label_jadwal_status.setText("🗑️ Override lokal dihapus.")
+        self.label_jadwal_status.setStyleSheet(f"font-size: 12px; color: {WARNA['sukses_teks']};")
+        self._isi_tabel_override_lokal()
+
+    def _reset_status_push(self):
+        """Reset override yang ditolak server menjadi 'pending' supaya
+        dicoba push ulang di siklus sync berikutnya."""
+        jumlah = self.repo.jadwal_override_lokal_semua()
+        jumlah_ditolak = sum(1 for o in jumlah if o["status_push"] == "ditolak")
+        if jumlah_ditolak == 0:
+            QMessageBox.information(
+                self,
+                "Reset Status Push",
+                "Tidak ada override dengan status '✗ server menolak'.\n"
+                "Semua override sudah terkirim atau masih menunggu sync.",
+            )
+            return
+        jawab = QMessageBox.question(
+            self,
+            "Konfirmasi Reset",
+            f"Reset {jumlah_ditolak} override yang ditolak server menjadi 'menunggu sync'?\n\n"
+            "Akan dicoba push ulang di siklus sync berikutnya.",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if jawab != QMessageBox.Yes:
+            return
+        n = self.repo.reset_jadwal_override_ditolak()
+        self.label_jadwal_status.setText(f"🔁 {n} override direset, menunggu push ulang.")
+        self.label_jadwal_status.setStyleSheet(f"font-size: 12px; color: {WARNA['warning_teks']};")
+        self._isi_tabel_override_lokal()
+
+    @staticmethod
+    def _input_teks(prompt: str, default: str = ""):
+        return QInputDialog.getText(None, prompt, f"{prompt}:", text=default)
+
+    @staticmethod
+    def _validasi_jam(s: str) -> bool:
+        import re
+        return bool(re.fullmatch(r"\d{2}:\d{2}", s))
+
     def _build_guru_ui(self, parent: QWidget, server_url: str):
         layout = QVBoxLayout(parent)
         layout.setContentsMargins(32, 24, 32, 24)
@@ -851,7 +1170,7 @@ class AdminWindow(QMainWindow):
         layout.addWidget(judul)
         layout.addStretch()
         btn_web = QPushButton("🌐 Kelola Guru di Dashboard Web")
-        btn_web.clicked.connect(lambda: webbrowser.open(f"{server_url}/dashboard/guru"))
+        btn_web.clicked.connect(lambda: webbrowser.open(f"{self.dashboard_url}/dashboard/guru"))
         layout.addWidget(btn_web)
 
     def _build_laporan_ui(self, parent: QWidget, server_url: str):
@@ -862,25 +1181,276 @@ class AdminWindow(QMainWindow):
         layout.addWidget(judul)
         layout.addStretch()
         btn_web = QPushButton("🌐 Lihat Laporan Lengkap di Web")
-        btn_web.clicked.connect(lambda: webbrowser.open(f"{server_url}/dashboard/laporan"))
+        btn_web.clicked.connect(lambda: webbrowser.open(f"{self.dashboard_url}/dashboard/laporan"))
         layout.addWidget(btn_web)
 
     def _build_sync_ui(self, parent: QWidget, server_url: str):
         layout = QVBoxLayout(parent)
         layout.setContentsMargins(32, 24, 32, 24)
-        judul = QLabel("🔄 Sinkronisasi Manual")
+        layout.setSpacing(16)
+
+        judul = QLabel("🔄 Sinkronisasi Server")
         judul.setStyleSheet("font-size: 20px; font-weight: 600;")
         layout.addWidget(judul)
-        
+
+        sub = QLabel(
+            "Status data lokal vs server. Hijau = sudah tersinkron, "
+            "kuning = menunggu, merah = gagal (akan dicoba ulang otomatis)."
+        )
+        sub.setStyleSheet(f"font-size: 13px; color: {WARNA['teks_sekunder']};")
+        layout.addWidget(sub)
+
+        # Kartu ringkasan (4 kolom)
+        kartu = QHBoxLayout()
+        kartu.setSpacing(12)
+        self.sync_kartu = {}
+        for kunci, label in [
+            ("total_absensi", "Total Absensi"),
+            ("sudah_sync", "✓ Tersinkron"),
+            ("belum_sync", "⏳ Menunggu"),
+            ("gagal_sync", "✗ Gagal / Retry"),
+        ]:
+            frame = QFrame()
+            frame.setStyleSheet(
+                f"background-color: {WARNA['surface_2']}; border: 1px solid {WARNA['border']}; "
+                "border-radius: 8px; padding: 6px;"
+            )
+            frame.setMinimumHeight(96)
+            frame.setMaximumHeight(104)
+            fv = QVBoxLayout(frame)
+            fv.setContentsMargins(10, 8, 10, 8)
+            fv.setSpacing(2)
+            lbl_nilai = QLabel("0")
+            lbl_nilai.setObjectName(f"sync_nilai_{kunci}")
+            lbl_nilai.setStyleSheet(
+                f"font-size: 20px; font-weight: 700; color: {WARNA['teks_utama']};"
+            )
+            lbl_nilai.setMinimumHeight(30)
+            fv.addWidget(lbl_nilai)
+            lbl_ket = QLabel(label)
+            lbl_ket.setStyleSheet(f"font-size: 11px; color: {WARNA['teks_sekunder']};")
+            fv.addWidget(lbl_ket)
+            self.sync_kartu[kunci] = (frame, lbl_nilai, lbl_ket)
+            kartu.addWidget(frame, 1)
+        layout.addLayout(kartu)
+
+        # Progress bar sinkronisasi
+        bar_row = QHBoxLayout()
+        bar_row.setSpacing(12)
+        self.sync_progress = QProgressBar()
+        self.sync_progress.setRange(0, 100)
+        self.sync_progress.setValue(0)
+        self.sync_progress.setFormat("%p% tersinkron")
+        self.sync_progress.setTextVisible(True)
+        self.sync_progress.setMinimumHeight(28)
+        bar_row.addWidget(self.sync_progress, 1)
+        self.sync_label_persen = QLabel("0 / 0")
+        self.sync_label_persen.setStyleSheet(f"font-size: 13px; color: {WARNA['teks_sekunder']};")
+        bar_row.addWidget(self.sync_label_persen)
+        layout.addLayout(bar_row)
+
+        # Info data referensi (embedding, jadwal, dispensasi)
+        info_row = QHBoxLayout()
+        info_row.setSpacing(12)
+        self.sync_label_ref = QLabel("")
+        self.sync_label_ref.setStyleSheet(f"font-size: 13px; color: {WARNA['teks_sekunder']};")
+        info_row.addWidget(self.sync_label_ref, 1)
+        self.sync_label_last = QLabel("")
+        self.sync_label_last.setStyleSheet(f"font-size: 13px; color: {WARNA['teks_sekunder']};")
+        self.sync_label_last.setAlignment(Qt.AlignRight)
+        info_row.addWidget(self.sync_label_last)
+        layout.addLayout(info_row)
+
+        # Tombol aksi
+        aksi = QHBoxLayout()
+        aksi.setSpacing(12)
         btn_sync = QPushButton("🚀 Jalankan Sinkronisasi Sekarang")
         btn_sync.setObjectName("btnPrimary")
-        layout.addWidget(btn_sync)
-        
-        self.log_sync = QTextEdit()
-        self.log_sync.setReadOnly(True)
-        self.log_sync.setPlaceholderText("Log sinkronisasi akan muncul di sini...")
-        layout.addWidget(self.log_sync)
-        layout.addStretch()
+        btn_sync.clicked.connect(self._jalankan_sync_manual)
+        aksi.addWidget(btn_sync)
+        btn_refresh = QPushButton("🔄 Muat Ulang Status")
+        btn_refresh.clicked.connect(self._muat_status_sync)
+        aksi.addWidget(btn_refresh)
+        aksi.addStretch()
+        layout.addLayout(aksi)
+
+        # Label status proses
+        self.sync_label_proses = QLabel("")
+        self.sync_label_proses.setStyleSheet(f"font-size: 13px; color: {WARNA['teks_sekunder']};")
+        layout.addWidget(self.sync_label_proses)
+
+        # Tabel detail absensi (mana yang sudah / belum sync)
+        self.table_sync = QTableWidget(0, 5)
+        self.table_sync.setHorizontalHeaderLabels(
+            ["Waktu", "Siswa ID", "Tipe", "Status Sync", "Keterangan"]
+        )
+        self.table_sync.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.table_sync.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.table_sync.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.table_sync.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.table_sync.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
+        self.table_sync.verticalHeader().setVisible(False)
+        layout.addWidget(self.table_sync, 1)
+
+        # Refresh status otomatis tiap 10 detik selama panel terbuka
+        self._timer_status_sync = QTimer(self)
+        self._timer_status_sync.setInterval(10_000)
+        self._timer_status_sync.timeout.connect(self._muat_status_sync)
+        self._timer_status_sync.start()
+
+        # Muat status awal
+        self._muat_status_sync()
+
+    # ---------- Sinkronisasi: logika tampilan ----------
+
+    def _jalankan_sync_manual(self):
+        """Jalankan satu siklus sync di thread background supaya UI tidak
+        membeku, lalu muat ulang status."""
+        if self.sync_service is None:
+            self.sync_label_proses.setText(
+                "⚠️ Layanan sync tidak tersedia (aplikasi berjalan tanpa SyncService)."
+            )
+            return
+        from PySide6.QtCore import QThread
+        from app.sync.service import SyncService
+
+        self.btn_sync_diproses = True
+        self.sync_label_proses.setText("⏳ Sinkronisasi berjalan... mohon tunggu.")
+        self.sync_label_proses.setStyleSheet(f"color: {WARNA['warning_teks']};")
+
+        class _SiklusThread(QThread):
+            selesai = Signal(object)
+
+            def __init__(self, service: SyncService):
+                super().__init__()
+                self.service = service
+
+            def run(self):
+                ringkasan = self.service.siklus_sync()
+                self.selesai.emit(ringkasan)
+
+        self._thread_sync = _SiklusThread(self.sync_service)
+        self._thread_sync.selesai.connect(self._selesai_sync_manual)
+        self._thread_sync.finished.connect(
+            lambda: self.sync_label_proses.setText(
+                self.sync_label_proses.text() or "Sinkronisasi selesai."
+            )
+        )
+        self._thread_sync.start()
+
+    def _selesai_sync_manual(self, ringkasan):
+        self._muat_status_sync()
+        if ringkasan.online:
+            teks = (
+                f"✅ Sinkronisasi selesai — kirim {ringkasan.dikirim} "
+                f"(disimpan {ringkasan.disimpan}, duplikat {ringkasan.duplikat}, "
+                f"gagal {ringkasan.gagal}), tarik embedding {ringkasan.embedding_diperbarui}, "
+                f"jadwal {ringkasan.jadwal_diperbarui}, dispensasi {ringkasan.dispensasi_diperbarui}."
+            )
+            self.sync_label_proses.setStyleSheet(f"color: {WARNA['sukses_teks']};")
+        else:
+            teks = f"⚠️ Server tidak terjangkau. Data tetap aman di perangkat dan akan dikirim otomatis nanti. ({ringkasan.pesan_error or ''})"
+            self.sync_label_proses.setStyleSheet(f"color: {WARNA['warning_teks']};")
+        self.sync_label_proses.setText(teks)
+
+    def _muat_status_sync(self):
+        """Baca statistik dari repository dan tampilkan di dashboard."""
+        try:
+            st = self.repo.statistik_sync()
+        except Exception as e:
+            logger.warning("Gagal muat status sync: %s", e)
+            self.sync_label_proses.setText(f"❌ Gagal membaca status: {e}")
+            self.sync_label_proses.setStyleSheet(f"color: {WARNA['bahaya_teks']};")
+            return
+
+        total = st["total_absensi"]
+        sudah = st["sudah_sync"]
+        belum = st["belum_sync"]
+        gagal = st["gagal_sync"]
+
+        # Update kartu
+        for kunci, (frame, lbl_nilai, lbl_ket) in self.sync_kartu.items():
+            lbl_nilai.setText(str(st.get(kunci, 0)))
+
+        # Warna kartu (padding kecil agar angka tidak terpotong)
+        frame_sudah = self.sync_kartu["sudah_sync"][0]
+        frame_belum = self.sync_kartu["belum_sync"][0]
+        frame_gagal = self.sync_kartu["gagal_sync"][0]
+        frame_sudah.setStyleSheet(
+            f"background-color: {WARNA['sukses_bg']}; border: 1px solid {WARNA['sukses_border']}; border-radius: 8px; padding: 6px;"
+        )
+        frame_belum.setStyleSheet(
+            f"background-color: {WARNA['warning_bg']}; border: 1px solid {WARNA['warning_border']}; border-radius: 8px; padding: 6px;"
+        )
+        if gagal > 0:
+            frame_gagal.setStyleSheet(
+                f"background-color: {WARNA['bahaya_bg']}; border: 1px solid {WARNA['bahaya_border']}; border-radius: 8px; padding: 6px;"
+            )
+        else:
+            frame_gagal.setStyleSheet(
+                f"background-color: {WARNA['surface_2']}; border: 1px solid {WARNA['border']}; border-radius: 8px; padding: 6px;"
+            )
+
+        # Progress bar
+        if total > 0:
+            pct = round(sudah / total * 100)
+            self.sync_progress.setValue(pct)
+            self.sync_label_persen.setText(f"{sudah} / {total} absensi tersinkron")
+        else:
+            self.sync_progress.setValue(0)
+            self.sync_label_persen.setText("Belum ada data absensi")
+
+        # Info referensi
+        self.sync_label_ref.setText(
+            f"📚 Referensi lokal: {st['embedding_total']} siswa · "
+            f"{st['jadwal_total']} jadwal · {st['dispensasi_total']} dispensasi"
+        )
+        if st.get("last_sync"):
+            try:
+                from datetime import datetime as _dt
+                ts = _dt.fromisoformat(st["last_sync"])
+                self.sync_label_last.setText(f"🕒 Sync terakhir: {ts.strftime('%d/%m/%Y %H:%M:%S')}")
+            except Exception:
+                self.sync_label_last.setText(f"🕒 Sync terakhir: {st['last_sync']}")
+        else:
+            self.sync_label_last.setText("🕒 Sync terakhir: belum pernah")
+
+        # Tabel detail (20 terbaru)
+        self._isi_tabel_sync()
+
+    def _isi_tabel_sync(self):
+        """Tampilkan 20 record absensi terbaru dengan warna status."""
+        try:
+            rows = self.repo.record_sync_terbaru(batas=20)
+        except Exception as e:
+            logger.warning("Gagal ambil daftar sync: %s", e)
+            return
+        self.table_sync.setRowCount(0)
+        for i, r in enumerate(rows):
+            self.table_sync.insertRow(i)
+            jam = str(r.get("jam_aktual", "")) or ""
+            siswa = str(r.get("siswa_id", ""))
+            tipe = str(r.get("type", ""))
+            synced = bool(r.get("synced"))
+            status = str(r.get("sync_status", "") or "")
+            if synced:
+                teks_status = "✓ Tersinkron"
+                warna = WARNA["sukses_teks"]
+            elif status:
+                teks_status = "✗ Gagal / retry"
+                warna = WARNA["bahaya_teks"]
+            else:
+                teks_status = "⏳ Menunggu"
+                warna = WARNA["warning_teks"]
+
+            item_jam = QTableWidgetItem(jam)
+            item_siswa = QTableWidgetItem(siswa)
+            item_tipe = QTableWidgetItem(tipe)
+            item_status = QTableWidgetItem(teks_status)
+            item_status.setForeground(QColor(warna))
+            item_ket = QTableWidgetItem(status if status else "—")
+            for c, item in enumerate([item_jam, item_siswa, item_tipe, item_status, item_ket]):
+                self.table_sync.setItem(i, c, item)
 
     def closeEvent(self, event):
         self.logout_admin.emit()

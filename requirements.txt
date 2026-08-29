@@ -8,11 +8,8 @@ python-dotenv==1.0.1
 numpy>=2.0.2
 PyJWT>=2.8.0
 keyring>=24.0.0
-
-# testing
-pytest==8.3.3
-pytest-qt==4.5.0
-responses==0.25.3
-
-# build installer
+certifi>=2024.7.4
+threadpoolctl>=3.5.0
 pyinstaller>=6.10.0
+
+# Testing dependencies are in requirements-dev.txt

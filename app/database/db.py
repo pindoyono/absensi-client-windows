@@ -24,7 +24,10 @@ def get_connection() -> sqlcipher3.Connection:
     db_path = Path(settings.db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
-    conn = sqlcipher3.connect(str(db_path))
+    # check_same_thread=False: koneksi ini dipakai lintas thread
+    # (SyncWorker QThread background + thread sync manual dari panel admin).
+    # Akses diserialisasi lewat _lock di repository (lihat repository.py).
+    conn = sqlcipher3.connect(str(db_path), check_same_thread=False)
     conn.row_factory = sqlcipher3.Row
 
     if settings.db_encryption_key:
@@ -37,6 +40,18 @@ def get_connection() -> sqlcipher3.Connection:
 
     with open(_SCHEMA_PATH) as f:
         conn.executescript(f.read())
+
+    # Migrasi idempotent: kolom status push untuk override jadwal lokal
+    # (DB lama punya tabel tanpa kolom ini).
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(jadwal_override_lokal)").fetchall()]
+        if cols and "status_push" not in cols:
+            conn.execute("ALTER TABLE jadwal_override_lokal ADD COLUMN status_push TEXT NOT NULL DEFAULT 'pending'")
+        if cols and "pesan_push" not in cols:
+            conn.execute("ALTER TABLE jadwal_override_lokal ADD COLUMN pesan_push TEXT")
+    except Exception:
+        pass  # tabel belum ada di DB sangat lama — aman diabaikan
+
     conn.commit()
 
     return conn

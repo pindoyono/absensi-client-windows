@@ -27,6 +27,7 @@ class HasilDeteksi:
     lolos_liveness: bool
     embedding: np.ndarray | None  # vector float, None kalau wajah/liveness gagal
     alasan_gagal: str | None = None
+    skor_liveness: float | None = None  # skor liveness (0-1), None jika tidak dihitung
 
 
 class FaceEngine(ABC):

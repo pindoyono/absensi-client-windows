@@ -70,3 +70,13 @@ def test_jadwal_cache_override_menang_atas_standar(repo):
     hasil = repo.jadwal_untuk_kelas("XI")
     assert hasil["sumber"] == "override"
     assert hasil["jam_masuk"] == "08:00"
+
+
+def test_jadwal_cache_hanya_dipakai_pada_tanggalnya(repo):
+    repo.replace_jadwal_cache([
+        {"kelas": "XI", "tanggal": "2026-08-27", "jam_masuk": "07:00", "jam_pulang": "15:00", "sumber": "standar"},
+        {"kelas": "XI", "tanggal": "2026-08-28", "jam_masuk": "07:00", "jam_pulang": "11:45", "sumber": "standar"},
+    ])
+    hasil = repo.jadwal_untuk_kelas("XI", "2026-08-28")
+    assert hasil["jam_pulang"] == "11:45"
+    assert repo.jadwal_untuk_kelas("XI", "2026-08-29") is None

@@ -69,6 +69,32 @@ def test_siklus_sync_tanpa_record_tetap_tarik_embedding():
     api.tarik_embedding.assert_called_with(diperbarui_sejak="2026-08-23T00:00:00")
     repo.set_metadata.assert_called_with("embedding_diperbarui_sejak", "2026-08-24T10:00:00")
 
+def test_siklus_sync_hapus_siswa_nonaktif_dari_server():
+    repo, api = MagicMock(), MagicMock()
+    api.cek_koneksi.return_value = True
+    repo.record_belum_sync.return_value = []
+    repo.get_metadata.return_value = None
+    repo.hapus_siswa_dan_embedding.return_value = True
+    api.tarik_embedding.return_value = {
+        "server_time": "2026-08-24T10:00:00", "jumlah": 2,
+        "data": [
+            {"siswa_id": 1, "nis": "A1", "nama": "X", "kelas": "XI",
+             "embedding_encrypted": "aabb", "model_version": "v1", "diperbarui_pada": "t",
+             "aktif": True},
+            {"siswa_id": 2, "nis": "A2", "nama": "Y", "kelas": "XII",
+             "embedding_encrypted": "ccdd", "model_version": "v1", "diperbarui_pada": "t",
+             "aktif": False},
+        ],
+    }
+
+    hasil = SyncService(repo, api).siklus_sync()
+
+    # Siswa nonaktif dihapus, tidak di-upsert
+    repo.hapus_siswa_dan_embedding.assert_called_once_with(2)
+    repo.upsert_siswa.assert_called_once_with(1, "A1", "X", "XI")
+    repo.upsert_embedding.assert_called_once()
+    assert hasil.embedding_diperbarui == 2
+
 
 def test_siklus_sync_menarik_jadwal_untuk_kelas_yang_ada():
     repo, api = MagicMock(), MagicMock()
@@ -86,8 +112,8 @@ def test_siklus_sync_menarik_jadwal_untuk_kelas_yang_ada():
     repo.replace_jadwal_cache.assert_called_once()
 
 
-def test_siklus_sync_jadwal_belum_siap_tidak_dianggap_error():
-    from app.api.client import LayananJadwalBelumSiap
+def test_siklus_sync_jadwal_fetch_failure_tidak_dianggap_error():
+    import requests.exceptions
 
     repo, api = MagicMock(), MagicMock()
     api.cek_koneksi.return_value = True
@@ -95,10 +121,10 @@ def test_siklus_sync_jadwal_belum_siap_tidak_dianggap_error():
     repo.get_metadata.return_value = None
     repo.daftar_kelas.return_value = ["XI"]
     api.tarik_embedding.return_value = {"server_time": "t", "jumlah": 0, "data": []}
-    api.tarik_jadwal_efektif.side_effect = LayananJadwalBelumSiap("belum diisi")
+    api.tarik_jadwal_efektif.side_effect = requests.exceptions.ConnectionError("server down")
 
     hasil = SyncService(repo, api).siklus_sync()
 
-    # bukan error fatal -- pesan_error tetap None (beda dengan KoneksiGagal)
-    assert hasil.pesan_error is None
+    # Sinkronisasi tetap selesai, tetapi kegagalan jadwal dilaporkan.
+    assert "Koneksi terputus saat tarik jadwal" in hasil.pesan_error
     assert hasil.jadwal_diperbarui == 0

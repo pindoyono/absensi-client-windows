@@ -82,10 +82,10 @@ class TestSyncNetworkFailures:
 
 
 class TestSyncJadwalFailover:
-    """Test sync jadwal fallback when JWT refresh fails."""
+    """Test sync jadwal fallback when server unreachable."""
 
-    def test_jadwal_fetch_with_expired_jwt(self):
-        """Test jadwal fetch when JWT is expired (401)."""
+    def test_jadwal_fetch_with_server_error(self):
+        """Test jadwal fetch when server returns error."""
         mock_repo = Mock(spec=AbsensiRepository)
         mock_repo.record_belum_sync.return_value = []
         mock_repo.daftar_kelas.return_value = ["XI Elektronika"]
@@ -94,14 +94,11 @@ class TestSyncJadwalFailover:
         mock_api.tarik_embedding.return_value = {"jumlah": 0, "data": [], "server_time": "2026-08-24T00:00:00"}
         mock_api.tarik_dispensasi_hari_ini.return_value = []
         
-        # Simulate 401 on jadwal fetch
-        mock_response = Mock()
-        mock_response.status_code = 401
-        mock_api.tarik_jadwal_efektif.side_effect = requests.exceptions.HTTPError(response=mock_response)
+        # Simulate connection error on jadwal fetch
+        mock_api.tarik_jadwal_efektif.side_effect = requests.exceptions.ConnectionError()
         
         sync = SyncService(mock_repo, mock_api)
         
         # Should gracefully handle, use cached jadwal
-        # (implementation detail: graceful degradation)
         result = sync.siklus_sync()
         assert result is not None

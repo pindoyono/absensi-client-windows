@@ -24,7 +24,10 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "data", "device_config.json")
+# APP_DIR bisa di-override lewat env (lihat app/config.py) — supaya path
+# konsisten antara dev, PyInstaller .exe, dan instalasi via setup script.
+_APP_DIR = os.environ.get("ABSENSI_APP_DIR", os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+CONFIG_PATH = os.path.join(_APP_DIR, "data", "device_config.json")
 
 
 @dataclass
@@ -214,20 +217,31 @@ def load_config_lokal() -> dict:
 
 
 def update_env_file(api_key: str) -> None:
-    """Update DEVICE_API_KEY di file .env."""
-    env_path = os.path.join(os.path.dirname(__file__), "..", "..", ".env")
+    """Update DEVICE_API_KEY di file .env.
+
+    .env bisa berisi komentar/emoji/karakter non-ASCII — buka dengan
+    encoding utf-8 dan fallback ke cp1252/latin-1 supaya tidak crash
+    (UnicodeDecodeError) kalau file punya byte non-UTF8.
+    """
+    env_path = os.path.join(_APP_DIR, ".env")
     if not os.path.exists(env_path):
         return
 
-    lines = []
-    with open(env_path, "r") as f:
-        for line in f:
-            if line.strip().startswith("DEVICE_API_KEY="):
-                lines.append(f"DEVICE_API_KEY={api_key}\n")
-            else:
-                lines.append(line)
+    def _baca():
+        try:
+            with open(env_path, "r", encoding="utf-8") as f:
+                return f.readlines()
+        except UnicodeDecodeError:
+            # Fallback: baca byte mentah, ganti karakter tak dikenal
+            with open(env_path, "r", encoding="cp1252", errors="replace") as f:
+                return f.readlines()
 
-    with open(env_path, "w") as f:
+    lines = _baca()
+    for i, line in enumerate(lines):
+        if line.strip().startswith("DEVICE_API_KEY="):
+            lines[i] = f"DEVICE_API_KEY={api_key}\n"
+
+    with open(env_path, "w", encoding="utf-8") as f:
         f.writelines(lines)
 
     logger.info("API Key diperbarui di .env")

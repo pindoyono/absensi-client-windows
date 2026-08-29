@@ -14,9 +14,11 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QSizePolicy, QPushButton,
+    QLineEdit, QInputDialog, QMessageBox,
 )
 
 from app.business.attendance_logic import proses_absen, HasilAbsen
+from app.config import settings
 from app.database.repository import AbsensiRepository
 from app.device.setup import load_config_lokal, save_config_lokal
 from app.face.engine_base import FaceEngine
@@ -33,6 +35,7 @@ class KioskWindow(QWidget):
         device_id: str, face_encryption_key: str,
         jam_masuk_standar: dtime, jam_pulang_standar: dtime,
         gunakan_kamera: bool = True, parent=None, audit_logger=None,
+        sync_service=None,
     ):
         super().__init__(parent)
         self.repo = repo
@@ -42,6 +45,7 @@ class KioskWindow(QWidget):
         self.face_encryption_key = face_encryption_key
         self.jam_masuk_standar = jam_masuk_standar
         self.jam_pulang_standar = jam_pulang_standar
+        self.sync_service = sync_service
 
         self._status_online = True
         self._menampilkan_hasil = False
@@ -99,11 +103,30 @@ class KioskWindow(QWidget):
         self.label_status_jaringan = QLabel("● Online · tersinkron")
         self.label_status_jaringan.setStyleSheet(f"color: {WARNA['sukses_teks']}; font-size: 13px;")
 
+        self.label_status_sync = QLabel("")
+        self.label_status_sync.setStyleSheet(f"color: {WARNA['teks_sekunder']}; font-size: 12px;")
+
+        # Badge jadwal lokal (offline override) — muncul kalau ada override
+        # jadwal yang dibuat di device dan berlaku hari ini (Opsi C).
+        self.label_jadwal_lokal = QLabel("🔄 Jadwal Lokal")
+        self.label_jadwal_lokal.setStyleSheet(
+            f"background-color: {WARNA['warning_bg']}; color: {WARNA['warning_teks']}; "
+            f"border: 1px solid {WARNA['warning_border']}; border-radius: 6px; "
+            "padding: 2px 8px; font-size: 12px; font-weight: 600;"
+        )
+        self.label_jadwal_lokal.setVisible(False)
+        self.label_jadwal_lokal.setToolTip(
+            "Absensi hari ini memakai jadwal override yang dibuat di device ini "
+            "(offline). Akan dikirim ke server saat online."
+        )
+
         self.label_jam = QLabel("--:--")
         self.label_jam.setObjectName("jamTampilan")
         self.label_jam.setStyleSheet(f"color: {WARNA['teks_utama']}; font-size: 13px; font-weight: 600;")
 
         header.addWidget(self.label_status_jaringan)
+        header.addWidget(self.label_status_sync)
+        header.addWidget(self.label_jadwal_lokal)
         header.addStretch()
         header.addWidget(self.label_jam)
 
@@ -125,8 +148,20 @@ class KioskWindow(QWidget):
         )
         self.btn_admin.clicked.connect(self._on_btn_admin_clicked)
 
+        # Tombol admin: buka panel admin, verifikasi password dari .env
+        self.btn_admin_panel = QPushButton("⚙️ Panel Admin")
+        self.btn_admin_panel.setCursor(Qt.PointingHandCursor)
+        self.btn_admin_panel.setMinimumHeight(32)
+        self.btn_admin_panel.setStyleSheet(
+            f"QPushButton {{ background-color: {WARNA['surface_2']}; color: {WARNA['teks_utama']}; "
+            f"border: 1px solid {WARNA['border']}; border-radius: 6px; padding: 4px 12px; font-size: 12px; font-weight: 600; }}"
+            f"QPushButton:hover {{ background-color: {WARNA['border']}; }}"
+        )
+        self.btn_admin_panel.clicked.connect(self._on_btn_admin_panel_clicked)
+
         self.header_right.addWidget(self.lbl_user)
         self.header_right.addWidget(self.btn_admin)
+        self.header_right.addWidget(self.btn_admin_panel)
 
         header.addLayout(self.header_right)
         layout.addLayout(header)
@@ -216,6 +251,31 @@ class KioskWindow(QWidget):
             self.label_status_jaringan.setText("● Offline · disimpan lokal")
             self.label_status_jaringan.setStyleSheet(f"color: {WARNA['teks_muted']}; font-size: 13px;")
 
+    def set_sync_status(self, ringkasan) -> None:
+        """Perbarui label status sync dengan waktu terakhir dan jumlah data."""
+        try:
+            # Waktu terakhir sync dari metadata
+            terakhir = self.repo.get_metadata("sync_terakhir")
+            if not terakhir:
+                terakhir = "belum pernah"
+            else:
+                try:
+                    from datetime import datetime as _dt
+                    terakhir = _dt.fromisoformat(terakhir).strftime("%d/%m %H:%M")
+                except Exception:
+                    pass
+
+            # Jumlah data yang disinkronkan
+            if ringkasan is not None:
+                detail = f" · {ringkasan.dikirim} kirim, {ringkasan.embedding_diperbarui} wajah, {ringkasan.jadwal_diperbarui} jadwal"
+            else:
+                detail = ""
+
+            self.label_status_sync.setText(f"Sync: {terakhir}{detail}")
+            self.label_status_sync.setStyleSheet(f"color: {WARNA['teks_sekunder']}; font-size: 12px;")
+        except Exception:
+            pass
+
     # ---------- Alur kamera ----------
 
     def _tick_kamera(self) -> None:
@@ -246,6 +306,14 @@ class KioskWindow(QWidget):
         if not hasil_deteksi.lolos_liveness:
             alasan = (hasil_deteksi.alasan_gagal or "").lower()
             if "spoof" in alasan:
+                self.repo.log_liveness(
+                    wajah_terdeteksi=True,
+                    is_real=False,
+                    liveness_score=hasil_deteksi.skor_liveness,
+                    ambang_saat_itu=0.0,
+                    alasan_gagal=hasil_deteksi.alasan_gagal,
+                    device_id=self.device_id,
+                )
                 self._tampilkan_hasil_spoofing(hasil_deteksi.alasan_gagal or "Terdeteksi spoofing")
             return
 
@@ -254,9 +322,24 @@ class KioskWindow(QWidget):
             self._tampilkan_hasil_wajah_tidak_dikenali()
             return
 
-        jadwal = self.repo.jadwal_untuk_kelas(match.kelas)
+        self.repo.log_liveness(
+            wajah_terdeteksi=True,
+            is_real=True,
+            liveness_score=hasil_deteksi.skor_liveness,
+            ambang_saat_itu=0.0,
+            siswa_id=match.siswa_id,
+            device_id=self.device_id,
+        )
+
+        jadwal = self.repo.jadwal_untuk_kelas(match.kelas, datetime.now().date().isoformat())
         jam_masuk = self._parse_jam(jadwal["jam_masuk"]) if jadwal else self.jam_masuk_standar
         jam_pulang = self._parse_jam(jadwal["jam_pulang"]) if jadwal else self.jam_pulang_standar
+
+        # Badge kiosk: tunjukkan kalau absensi pakai jadwal override lokal
+        # (dibuat di device, Opsi C) — bukan jadwal server. Baris override
+        # lokal punya kolom 'id' (UUID), baris jadwal_cache server tidak.
+        pakai_lokal = bool(jadwal is not None and "id" in jadwal.keys())
+        self._set_badge_jadwal_lokal(pakai_lokal)
 
         keputusan = proses_absen(
             self.repo, match.siswa_id, self.device_id, jam_masuk, jam_pulang,
@@ -321,6 +404,13 @@ class KioskWindow(QWidget):
         self.label_status_detail.setStyleSheet(f"color: {warna_teks}; font-size: 13px;")
         self.kartu_status.setVisible(True)
 
+    def _set_badge_jadwal_lokal(self, aktif: bool) -> None:
+        """Tampilkan/sembunyikan badge '🔄 Jadwal Lokal' di header kiosk.
+        Aktif saat absensi memakai override jadwal yang dibuat di device
+        ini (offline-first, Opsi C). Badge akan hilang saat kembali ke idle
+        atau jadwal lokal sudah tidak berlaku."""
+        self.label_jadwal_lokal.setVisible(aktif)
+
     def _kembali_ke_idle(self) -> None:
         self._menampilkan_hasil = False
         self.label_nama.setText("")
@@ -329,8 +419,12 @@ class KioskWindow(QWidget):
         self.label_hasil.setStyleSheet(f"font-size: 15px; color: {WARNA['teks_sekunder']};")
         self.kartu_status.setVisible(False)
 
-    def _buka_admin(self, event=None):
-        """Buka jendela Admin/Guru Piket untuk login, enrollment, jadwal, dll."""
+    def _buka_admin(self, bypass_login: bool = False):
+        """Buka jendela Admin/Guru Piket untuk login, enrollment, jadwal, dll.
+
+        bypass_login=True hanya untuk jalur ⚙️ Panel Admin (sudah diverifikasi
+        password). Tombol 🔐 Login Admin memakai jalur normal: login Google SSO.
+        """
         from app.ui.admin_window import AdminWindow
 
         # Tutup jika masih terbuka
@@ -343,16 +437,31 @@ class KioskWindow(QWidget):
         self._admin_window = AdminWindow(
             engine=self.engine,
             repo=self.repo,
-            server_url="https://absen.smkn2malinau.sch.id",
+            server_url=settings.server_url,
+            dashboard_url=settings.dashboard_url,
             face_encryption_key=self.face_encryption_key,
             device_id=self.device_id,
+            bypass_login=bypass_login,
+            sync_service=self.sync_service,
         )
         self._admin_window.logout_admin.connect(self._on_admin_logout)
         self._admin_window.login_sukses_signal.connect(self._update_login_state)
         # Resume kamera saat admin window ditutup
         self._admin_window.window_closed.connect(self._resume_kamera)
+        self._admin_window.window_closed.connect(self._lepas_stays_on_top)
         self._admin_window.show()
         self._admin_window.activateWindow()
+
+    def _lepas_stays_on_top(self):
+        """Lepas flag StaysOnTop dari admin window setelah ditutup, supaya
+        tidak menimpa window lain (kiosk fullscreen) di masa mendatang."""
+        if self._admin_window is not None:
+            try:
+                self._admin_window.setWindowFlags(
+                    self._admin_window.windowFlags() & ~Qt.WindowStaysOnTopHint
+                )
+            except Exception:
+                pass
 
     def _pause_kamera(self) -> None:
         """Hentikan timer & release kamera agar admin window bisa pakai."""
@@ -405,6 +514,27 @@ class KioskWindow(QWidget):
         # Jika belum login, buka admin window untuk login
         self._buka_admin()
 
+    def _on_btn_admin_panel_clicked(self):
+        """Buka panel admin setelah verifikasi password dari konfigurasi (.env)."""
+        password, ok = QInputDialog.getText(
+            self,
+            "Verifikasi Admin",
+            "Masukkan password admin:",
+            QLineEdit.Password,
+        )
+        if not ok:
+            return
+        if not settings.admin_password:
+            QMessageBox.critical(
+                self, "Konfigurasi Tidak Lengkap",
+                "ADMIN_PASSWORD belum diset di .env.\nHubungi admin untuk mengatur password panel.",
+            )
+            return
+        if password != settings.admin_password:
+            QMessageBox.warning(self, "Akses Ditolak", "Password salah. Silakan coba lagi.")
+            return
+        self._buka_admin(bypass_login=True)
+
     def _update_login_state(self):
         """Update tombol login/logout + username label berdasarkan config."""
         config = load_config_lokal()
@@ -428,12 +558,25 @@ class KioskWindow(QWidget):
 
     @staticmethod
     def _cek_jwt_valid(jwt_token: str) -> bool:
-        """Cek apakah JWT masih valid (belum expired)."""
+        """Cek apakah JWT masih valid (belum expired) dan signature cocok
+        dengan secret server. Secret diambil dari config lokal — kalau
+        tidak tersedia, token dianggap TIDAK valid (fail-closed)."""
         if not jwt_token:
             return False
         try:
             import jwt, time
-            payload = jwt.decode(jwt_token, options={"verify_signature": False})
+            from app.config import settings
+            secret = settings.jwt_secret
+            if not secret:
+                # Tanpa secret kita tidak bisa verifikasi signature —
+                # fail-closed lebih aman daripada menerima token palsu.
+                return False
+            payload = jwt.decode(
+                jwt_token,
+                key=secret,
+                algorithms=["HS256"],
+                options={"verify_exp": True},
+            )
             return payload.get("exp", 0) > time.time()
         except Exception:
             return False
