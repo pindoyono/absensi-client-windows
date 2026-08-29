@@ -24,6 +24,14 @@ class SyncWorker(QThread):
             try:
                 ringkasan = self.service.siklus_sync()
                 self.siklus_selesai.emit(ringkasan)
+                # Catat ke sync_event_log (PRD observabilitas: jangan cuma
+                # tercatat di log file, tapi benar-benar ada barisnya per siklus)
+                if self.service.audit_logger is not None:
+                    self.service.audit_logger.log_sync_complete(
+                        duration_ms=0,
+                        success_count=ringkasan.disimpan + ringkasan.duplikat,
+                        fail_count=ringkasan.gagal,
+                    )
                 # Emit status string untuk UI badge (REQ-OPS-002)
                 if not ringkasan.online:
                     self.sync_status_changed.emit("OFFLINE")
@@ -36,6 +44,8 @@ class SyncWorker(QThread):
             except Exception as e:  # noqa: BLE001 — sync worker TIDAK BOLEH mati karena 1 error
                 self.siklus_selesai.emit(RingkasanSiklus(online=False, pesan_error=str(e)))
                 self.sync_status_changed.emit("ERROR")
+                if self.service.audit_logger is not None:
+                    self.service.audit_logger.log_sync_fail(str(e))
 
             # Tidur bertahap supaya thread bisa berhenti cepat saat app ditutup.
             for _ in range(self.interval_detik):

@@ -56,6 +56,16 @@ class Settings:
     # ini murni untuk buffer kecil (siswa antre di gerbang, bukan telat asli)
     toleransi_terlambat_menit: int = int(os.environ.get("TOLERANSI_TERLAMBAT_MENIT", "5"))
 
+    # --- Ambang batas kesegaran data (PRD observabilitas degradasi) ---
+    # Kalau data cache lokal lebih basi dari ambang ini, tampilkan badge
+    # peringatan di kiosk (bukan cuma tercatat di log).
+    batas_stale_jadwal_jam: int = int(os.environ.get("BATAS_STALE_JADWAL_JAM", "6"))
+    batas_stale_dispensasi_jam: int = int(os.environ.get("BATAS_STALE_DISPENSASI_JAM", "2"))
+    batas_stale_embedding_hari: int = int(os.environ.get("BATAS_STALE_EMBEDDING_HARI", "3"))
+
+    # Peringatan dini sebelum GURU_SERVICE_JWT benar-benar expired (jam)
+    batas_peringatan_jwt_jam: int = int(os.environ.get("BATAS_PERINGATAN_JWT_JAM", "2"))
+
     def validasi(self) -> list[str]:
         """Kembalikan daftar masalah konfigurasi — dipakai saat startup
         supaya device dengan setup salah ketahuan cepat, bukan gagal

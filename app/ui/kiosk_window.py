@@ -124,9 +124,25 @@ class KioskWindow(QWidget):
         self.label_jam.setObjectName("jamTampilan")
         self.label_jam.setStyleSheet(f"color: {WARNA['teks_utama']}; font-size: 13px; font-weight: 600;")
 
+        # Badge kesegaran data (PRD observabilitas degradasi) — tampil HANYA
+        # kalau jadwal/dispensasi/embedding cache lokal sudah basi melewati
+        # ambang batas. Tidak menambah noise saat semua normal.
+        self.label_kesegaran = QLabel("")
+        self.label_kesegaran.setStyleSheet(
+            f"background-color: {WARNA['warning_bg']}; color: {WARNA['warning_teks']}; "
+            f"border: 1px solid {WARNA['warning_border']}; border-radius: 6px; "
+            "padding: 2px 8px; font-size: 12px; font-weight: 600;"
+        )
+        self.label_kesegaran.setVisible(False)
+        self.label_kesegaran.setToolTip(
+            "Data cache lokal (jadwal/dispensasi/embedding) sudah lama tidak "
+            "diperbarui dari server. Hubungi admin untuk cek koneksi device."
+        )
+
         header.addWidget(self.label_status_jaringan)
         header.addWidget(self.label_status_sync)
         header.addWidget(self.label_jadwal_lokal)
+        header.addWidget(self.label_kesegaran)
         header.addStretch()
         header.addWidget(self.label_jam)
 
@@ -275,6 +291,34 @@ class KioskWindow(QWidget):
             self.label_status_sync.setStyleSheet(f"color: {WARNA['teks_sekunder']}; font-size: 12px;")
         except Exception:
             pass
+        self._update_badge_kesegaran(ringkasan)
+
+    def _update_badge_kesegaran(self, ringkasan=None) -> None:
+        """Tampilkan badge peringatan kalau data cache lokal sudah basi
+        melewati ambang batas (PRD observabilitas degradasi)."""
+        try:
+            from app.config import settings
+            status = self.repo.status_kesegaran_data()
+
+            masalah = []
+            if status["jadwal_jam_lalu"] is None or status["jadwal_jam_lalu"] > settings.batas_stale_jadwal_jam:
+                masalah.append("Jadwal")
+            if status["dispensasi_jam_lalu"] is None or status["dispensasi_jam_lalu"] > settings.batas_stale_dispensasi_jam:
+                masalah.append("Dispensasi")
+            if status["embedding_hari_lalu"] is None or status["embedding_hari_lalu"] > settings.batas_stale_embedding_hari:
+                masalah.append("Embedding")
+
+            # Peringatan dini kredensial (token layanan mau expired)
+            if ringkasan is not None and getattr(ringkasan, "peringatan_kredensial", None):
+                masalah.append("Token")
+
+            if masalah:
+                self.label_kesegaran.setText(f"⚠️ {' & '.join(masalah)} basi — hubungi admin")
+                self.label_kesegaran.setVisible(True)
+            else:
+                self.label_kesegaran.setVisible(False)
+        except Exception:
+            self.label_kesegaran.setVisible(False)
 
     # ---------- Alur kamera ----------
 

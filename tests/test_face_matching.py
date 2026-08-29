@@ -1,4 +1,5 @@
 import struct
+from datetime import datetime
 
 import numpy as np
 import pytest
@@ -129,3 +130,20 @@ def test_hapus_siswa_dan_embedding(repo):
 
 def test_hapus_siswa_dan_embedding_tidak_ada(repo):
     assert repo.hapus_siswa_dan_embedding(999) is False
+
+def test_status_kesegaran_data_kosong(repo):
+    status = repo.status_kesegaran_data()
+    assert status["jadwal_jam_lalu"] is None
+    assert status["dispensasi_jam_lalu"] is None
+    assert status["embedding_hari_lalu"] is None
+
+def test_status_kesegaran_data_dengan_jadwal(repo):
+    repo.conn.execute(
+        "INSERT INTO jadwal_cache (kelas, tanggal, hari, jam_masuk, jam_pulang, sumber, ditarik_pada) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ("XI", None, "SENIN", "07:00", "15:00", "standar", datetime.now().isoformat()),
+    )
+    repo.conn.commit()
+    status = repo.status_kesegaran_data()
+    assert status["jadwal_jam_lalu"] is not None
+    assert status["jadwal_jam_lalu"] < 0.1  # baru saja ditambahkan

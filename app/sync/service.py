@@ -29,6 +29,7 @@ class RingkasanSiklus:
     jadwal_override_ditolak: int = 0
     dispensasi_diperbarui: int = 0
     pesan_error: str | None = None
+    peringatan_kredensial: str | None = None
 
 
 class SyncService:
@@ -50,6 +51,18 @@ class SyncService:
         ringkasan = RingkasanSiklus(online=True)
         # Catat waktu sync terakhir (untuk ditampilkan di UI kiosk)
         self.repo.set_metadata("sync_terakhir", datetime.now().isoformat())
+
+        # Peringatan dini sebelum GURU_SERVICE_JWT benar-benar expired
+        # (PRD observabilitas degradasi) — supaya admin sempat regenerasi
+        # token sebelum jadwal/dispensasi berhenti update, bukan sesudahnya.
+        try:
+            sisa = self._sisa_masa_berlaku_jwt()
+            if sisa is not None and sisa < self._batas_peringatan_jwt_jam():
+                ringkasan.peringatan_kredensial = (
+                    f"Token layanan akan kedaluwarsa {sisa:.1f} jam lagi — hubungi admin"
+                )
+        except Exception:
+            pass
 
         # Bersihkan override lokal yang tanggalnya sudah lewat (kadaluarsa otomatis)
         try:
@@ -157,7 +170,35 @@ class SyncService:
             entries = self.api.tarik_dispensasi_hari_ini(hari_ini)
             self.repo.replace_dispensasi_cache(hari_ini, entries)
             ringkasan.dispensasi_diperbarui = len(entries)
+            self.repo.set_metadata("dispensasi_terakhir_sync", datetime.now().isoformat())
         except (KoneksiGagal, requests.exceptions.RequestException) as e:
             ringkasan.pesan_error = (ringkasan.pesan_error or "") + f" | Koneksi terputus saat tarik dispensasi: {e}"
 
         return ringkasan
+
+    # ---------- Helper: deteksi degradasi ----------
+
+    def _batas_peringatan_jwt_jam(self) -> int:
+        try:
+            from app.config import settings
+            return settings.batas_peringatan_jwt_jam
+        except Exception:
+            return 2
+
+    def _sisa_masa_berlaku_jwt(self) -> float | None:
+        """Hitung sisa jam sebelum GURU_SERVICE_JWT benar-benar expired.
+        Return None kalau token tidak ada atau tidak bisa di-decode."""
+        import os
+        token = os.environ.get("GURU_SERVICE_JWT", "")
+        if not token or token.startswith("dummy"):
+            return None
+        try:
+            import jwt as pyjwt
+            payload = pyjwt.decode(token, options={"verify_signature": False, "verify_exp": True})
+            exp = payload.get("exp")
+            if not exp:
+                return None
+            sisa_detik = exp - datetime.now().timestamp()
+            return max(sisa_detik / 3600, 0)
+        except Exception:
+            return None

@@ -479,6 +479,36 @@ class AbsensiRepository:
         row = self.conn.execute("SELECT nilai FROM sync_metadata WHERE kunci = ?", (kunci,)).fetchone()
         return row["nilai"] if row else None
 
+    def status_kesegaran_data(self) -> dict:
+        """Return {'jadwal_jam_lalu': ..., 'dispensasi_jam_lalu': ...}
+        -- None kalau belum pernah sync sama sekali."""
+        now = datetime.now()
+        hasil = {}
+
+        # Jadwal
+        jadwal_terakhir = self.conn.execute(
+            "SELECT MAX(ditarik_pada) as t FROM jadwal_cache"
+        ).fetchone()["t"]
+        hasil["jadwal_jam_lalu"] = (
+            (now - datetime.fromisoformat(jadwal_terakhir)).total_seconds() / 3600
+            if jadwal_terakhir else None
+        )
+
+        # Dispensasi
+        disp_terakhir = self.get_metadata("dispensasi_terakhir_sync")
+        hasil["dispensasi_jam_lalu"] = (
+            (now - datetime.fromisoformat(disp_terakhir)).total_seconds() / 3600
+            if disp_terakhir else None
+        )
+
+        # Embedding
+        emb_terakhir = self.get_metadata("embedding_diperbarui_sejak")
+        hasil["embedding_hari_lalu"] = (
+            (now - datetime.fromisoformat(emb_terakhir)).days
+            if emb_terakhir else None
+        )
+        return hasil
+
     def set_metadata(self, kunci: str, nilai: str) -> None:
         self.conn.execute(
             "INSERT INTO sync_metadata (kunci, nilai) VALUES (?, ?) ON CONFLICT(kunci) DO UPDATE SET nilai=excluded.nilai",

@@ -60,14 +60,14 @@ def test_siklus_sync_tanpa_record_tetap_tarik_embedding():
     api.tarik_embedding.return_value = {
         "server_time": "2026-08-24T10:00:00", "jumlah": 1,
         "data": [{"siswa_id": 1, "nis": "A1", "nama": "X", "kelas": "XI",
-                  "embedding_encrypted": "aabb", "model_version": "v1", "diperbarui_pada": "t"}],
+                  "embedding_encrypted": "aabb", "model_version": "v1", "diperbarui_pada": "t", "aktif": True}],
     }
 
     hasil = SyncService(repo, api).siklus_sync()
 
     assert hasil.embedding_diperbarui == 1
     api.tarik_embedding.assert_called_with(diperbarui_sejak="2026-08-23T00:00:00")
-    repo.set_metadata.assert_called_with("embedding_diperbarui_sejak", "2026-08-24T10:00:00")
+    repo.set_metadata.assert_any_call("embedding_diperbarui_sejak", "2026-08-24T10:00:00")
 
 def test_siklus_sync_hapus_siswa_nonaktif_dari_server():
     repo, api = MagicMock(), MagicMock()
