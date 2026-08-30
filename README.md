@@ -104,7 +104,7 @@ akhir `.exe` installer yang tinggal dijalankan di tiap komputer kiosk.
 - [x] Dashboard admin terbuka otomatis setelah login berhasil
 - [x] Enrollment siswa langsung tersimpan ke server + cache lokal
 - [x] Badge online/offline akurat (cek_koneksi logging + sync sebelum window tampil)
-- [x] `GURU_SERVICE_JWT` dibaca & diprioritaskan untuk `/jadwal/efektif`
+- [x] `/jadwal/efektif` pakai Device API Key langsung (tanpa `GURU_SERVICE_JWT`)
 
 ## Langkah Selanjutnya
 

@@ -24,6 +24,7 @@ pyinstaller --name AbsensiKiosk `
 ```
 
 Catatan tiap opsi:
+
 - `--onefile` — satu file .exe, lebih mudah didistribusikan (trade-off: startup sedikit lebih lambat karena unpack ke temp folder tiap start)
 - `--windowed` — tidak buka jendela terminal hitam di belakang (aplikasi kiosk, bukan tool command-line)
 - `--add-data` — **wajib**, `schema.sql` dibaca saat runtime (lihat `app/database/db.py`), kalau tidak diikutkan aplikasi akan crash saat pertama kali buka database
@@ -80,9 +81,21 @@ Windows startup — tidak perlu setup manual lagi seperti di `docs/SETUP.md` lan
 3. Isi kredensial device (lihat `docs/SETUP.md` langkah 1-2b untuk cara mendapatkannya)
 4. Jalankan aplikasi dari Start Menu atau tunggu restart berikutnya (auto-start aktif)
 
+> **⚠️ Gate On-Site Testing (REQ-TEST-001):**
+> `.env` default berisi `ON_SITE_TESTING_SELESAI=false`. Selama masih `false`:
+>
+> - Aplikasi menampilkan dialog peringatan saat startup
+> - Banner **"MODE TESTING"** tampil di kiosk
+> - Hasil scan wajah **TIDAK disimpan** ke DB (hanya simulasi)
+>
+> Set `ON_SITE_TESTING_SELESAI=true` **HANYA setelah** on-site testing selesai
+> & lolos (lihat `docs/ON_SITE_TESTING.md`). Ini mencegah device dipakai
+> reguler sebelum liveness & embedding diverifikasi di lapangan.
+
 ## 5. Update versi di kemudian hari
 
 Untuk update aplikasi tanpa install ulang dari nol:
+
 1. Build ulang `.exe` dengan langkah 1-2
 2. Ganti file `dist/AbsensiKiosk.exe` yang lama di tiap device (folder instalasi, `.env` tidak perlu diganti — tetap terpisah dari executable)
 

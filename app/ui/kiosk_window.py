@@ -35,7 +35,7 @@ class KioskWindow(QWidget):
         device_id: str, face_encryption_key: str,
         jam_masuk_standar: dtime, jam_pulang_standar: dtime,
         gunakan_kamera: bool = True, parent=None, audit_logger=None,
-        sync_service=None,
+        sync_service=None, mode_testing: bool = False,
     ):
         super().__init__(parent)
         self.repo = repo
@@ -46,6 +46,7 @@ class KioskWindow(QWidget):
         self.jam_masuk_standar = jam_masuk_standar
         self.jam_pulang_standar = jam_pulang_standar
         self.sync_service = sync_service
+        self.mode_testing = mode_testing
 
         self._status_online = True
         self._menampilkan_hasil = False
@@ -84,6 +85,13 @@ class KioskWindow(QWidget):
         self._timer_jam.timeout.connect(self._update_jam)
         self._timer_jam.start(1000)
         self._update_jam()
+
+        # Isi label jadwal header saat startup
+        self._update_jadwal_waktu()
+        # Evaluasi badge kesegaran data saat startup — kalau cache sudah
+        # basi (mis. device baru nyala setelah lama offline), badge langsung
+        # tampil tanpa menunggu siklus sync pertama selesai.
+        self._update_badge_kesegaran()
 
         # Update login state saat inisialisasi
         self._update_login_state()
@@ -146,6 +154,16 @@ class KioskWindow(QWidget):
         header.addStretch()
         header.addWidget(self.label_jam)
 
+        # Label jadwal hari ini — SELALU tampil di header supaya siswa tahu
+        # kapan harus absen masuk & pulang. Ukuran besar & kontras.
+        self.label_jadwal_header = QLabel("Masuk: --:--  Pulang: --:--")
+        self.label_jadwal_header.setStyleSheet(
+            f"background-color: {WARNA['surface_2']}; color: {WARNA['teks_utama']}; "
+            f"border: 1px solid {WARNA['border']}; border-radius: 6px; "
+            "padding: 4px 12px; font-size: 15px; font-weight: 700;"
+        )
+        header.addWidget(self.label_jadwal_header)
+
         # Container untuk login/logout tombol + username label
         self.header_right = QHBoxLayout()
         self.header_right.setSpacing(8)
@@ -181,6 +199,21 @@ class KioskWindow(QWidget):
 
         header.addLayout(self.header_right)
         layout.addLayout(header)
+
+        # Banner MODE TESTING — tampil saat on-site testing belum selesai.
+        # Mengingatkan operator bahwa device belum boleh dipakai reguler.
+        if self.mode_testing:
+            self.label_mode_testing = QLabel(
+                "🧪 MODE TESTING — hasil absen TIDAK disimpan. "
+                "Selesaikan on-site testing lalu set ON_SITE_TESTING_SELESAI=true di .env"
+            )
+            self.label_mode_testing.setAlignment(Qt.AlignCenter)
+            self.label_mode_testing.setStyleSheet(
+                f"background-color: {WARNA['warning_bg']}; color: {WARNA['warning_teks']}; "
+                f"border: 1px solid {WARNA['warning_border']}; "
+                "padding: 6px 12px; font-size: 13px; font-weight: 700;"
+            )
+            layout.addWidget(self.label_mode_testing)
 
         # Kartu utama di tengah
         kartu = QFrame(objectName="kartu")
@@ -291,14 +324,26 @@ class KioskWindow(QWidget):
             self.label_status_sync.setStyleSheet(f"color: {WARNA['teks_sekunder']}; font-size: 12px;")
         except Exception:
             pass
+        # Refresh jadwal header setiap siklus sync — jadwal cache bisa baru
+        # terisi/berubah setelah tarik jadwal dari server.
+        self._update_jadwal_waktu()
         self._update_badge_kesegaran(ringkasan)
 
     def _update_badge_kesegaran(self, ringkasan=None) -> None:
-        """Tampilkan badge peringatan kalau data cache lokal sudah basi
-        melewati ambang batas (PRD observabilitas degradasi)."""
+        """Tampilkan badge status data cache lokal. Selalu tampil:
+        - Hijau → data segar (jadwal, dispensasi, embedding masih valid)
+        - Kuning → ada data yang basi, perlu hubungi admin
+        - Kosong/skip kalau cache masih kosong total (belum pernah sync)."""
         try:
             from app.config import settings
             status = self.repo.status_kesegaran_data()
+
+            # Kalau belum ada data sama sekali (belum pernah sync), sembunyikan
+            if (status["jadwal_jam_lalu"] is None
+                    and status["dispensasi_jam_lalu"] is None
+                    and status["embedding_hari_lalu"] is None):
+                self.label_kesegaran.setVisible(False)
+                return
 
             masalah = []
             if status["jadwal_jam_lalu"] is None or status["jadwal_jam_lalu"] > settings.batas_stale_jadwal_jam:
@@ -308,15 +353,21 @@ class KioskWindow(QWidget):
             if status["embedding_hari_lalu"] is None or status["embedding_hari_lalu"] > settings.batas_stale_embedding_hari:
                 masalah.append("Embedding")
 
-            # Peringatan dini kredensial (token layanan mau expired)
-            if ringkasan is not None and getattr(ringkasan, "peringatan_kredensial", None):
-                masalah.append("Token")
-
             if masalah:
-                self.label_kesegaran.setText(f"⚠️ {' & '.join(masalah)} basi — hubungi admin")
-                self.label_kesegaran.setVisible(True)
+                self.label_kesegaran.setText(f"⚠️ {' & '.join(masalah)} basi")
+                self.label_kesegaran.setStyleSheet(
+                    f"background-color: {WARNA['warning_bg']}; color: {WARNA['warning_teks']}; "
+                    f"border: 1px solid {WARNA['warning_border']}; border-radius: 6px; "
+                    "padding: 2px 8px; font-size: 12px; font-weight: 600;"
+                )
             else:
-                self.label_kesegaran.setVisible(False)
+                self.label_kesegaran.setText("✓ Data segar")
+                self.label_kesegaran.setStyleSheet(
+                    f"background-color: {WARNA['sukses_bg']}; color: {WARNA['sukses_teks']}; "
+                    f"border: 1px solid {WARNA['sukses_border']}; border-radius: 6px; "
+                    "padding: 2px 8px; font-size: 12px; font-weight: 600;"
+                )
+            self.label_kesegaran.setVisible(True)
         except Exception:
             self.label_kesegaran.setVisible(False)
 
@@ -379,11 +430,30 @@ class KioskWindow(QWidget):
         jam_masuk = self._parse_jam(jadwal["jam_masuk"]) if jadwal else self.jam_masuk_standar
         jam_pulang = self._parse_jam(jadwal["jam_pulang"]) if jadwal else self.jam_pulang_standar
 
+        # Update panel jadwal dengan data kelas yang terdeteksi
+        self._update_jadwal_waktu(match.kelas)
+
         # Badge kiosk: tunjukkan kalau absensi pakai jadwal override lokal
         # (dibuat di device, Opsi C) — bukan jadwal server. Baris override
         # lokal punya kolom 'id' (UUID), baris jadwal_cache server tidak.
         pakai_lokal = bool(jadwal is not None and "id" in jadwal.keys())
         self._set_badge_jadwal_lokal(pakai_lokal)
+
+        # MODE TESTING: wajah dikenali tapi TIDAK disimpan ke DB — hanya
+        # simulasi hasil, supaya data testing tidak mencemari absensi resmi.
+        if self.mode_testing:
+            self._menampilkan_hasil = True
+            self.label_nama.setText(match.nama)
+            self.label_kelas.setText(match.kelas)
+            self.label_hasil.setText("🧪 [TEST] Wajah dikenali")
+            self.label_hasil.setStyleSheet(f"font-size: 15px; color: {WARNA['warning_teks']};")
+            self._set_kartu_status(
+                "MODE TESTING — absen tidak disimpan. "
+                f"Liveness: {hasil_deteksi.skor_liveness:.3f}",
+                WARNA["warning_teks"], WARNA["warning_bg"],
+            )
+            self._timer_reset.start(DURASI_TAMPIL_HASIL_MS)
+            return
 
         keputusan = proses_absen(
             self.repo, match.siswa_id, self.device_id, jam_masuk, jam_pulang,
@@ -462,6 +532,37 @@ class KioskWindow(QWidget):
         self.label_hasil.setText("Arahkan wajah ke kamera")
         self.label_hasil.setStyleSheet(f"font-size: 15px; color: {WARNA['teks_sekunder']};")
         self.kartu_status.setVisible(False)
+        # Kembalikan panel jadwal ke jadwal umum
+        self._update_jadwal_waktu()
+
+    def _update_jadwal_waktu(self, kelas: str | None = None) -> None:
+        """Perbarui label jadwal di header. Format: 'Masuk: ..:..  Pulang: ..:..'
+        Jika kelas diberikan, cari jadwal spesifik kelas tsb.
+        Jika tidak (idle), pakai jadwal umum/standar — dan kalau tidak ada
+        jadwal umum, fallback ke jadwal kelas pertama yang tersedia supaya
+        label tidak kosong ('--:--') padahal data jadwal ada."""
+        try:
+            tanggal = datetime.now().date().isoformat()
+            jadwal = self.repo.jadwal_untuk_kelas(kelas or "", tanggal)
+
+            # Fallback: saat idle (kelas kosong) tidak ada jadwal umum
+            # (kelas NULL), ambil jadwal kelas pertama yang tersedia supaya
+            # jam masuk/pulang tetap tampil.
+            if not jadwal and not kelas:
+                jadwal = self.repo.jadwal_pertama_tersedia(tanggal)
+
+            if jadwal:
+                masuk = jadwal["jam_masuk"][:5]  # HH:mm
+                pulang = jadwal["jam_pulang"][:5]
+                self.label_jadwal_header.setText(f"Masuk: {masuk}  Pulang: {pulang}")
+            else:
+                # Weekend atau tidak ada jadwal
+                self.label_jadwal_header.setText("Masuk: --:--  Pulang: --:--")
+
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning("Gagal update label jadwal: %s", e)
+            self.label_jadwal_header.setText("Masuk: --:--  Pulang: --:--")
 
     def _buka_admin(self, bypass_login: bool = False):
         """Buka jendela Admin/Guru Piket untuk login, enrollment, jadwal, dll.

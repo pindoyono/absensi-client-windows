@@ -323,6 +323,22 @@ class AbsensiRepository:
             (kelas, tanggal, tanggal),
         ).fetchone()
 
+    def jadwal_pertama_tersedia(self, tanggal: Optional[str] = None) -> Optional[sqlcipher3.Row]:
+        """Ambil jadwal apa pun yang tersedia di cache (untuk tampilan header
+        kiosk saat idle, ketika tidak ada jadwal umum kelas NULL). Prioritas:
+        override lokal aktif → override server bertanggal → standar umum.
+        Dipakai supaya label 'Masuk/Pulang' tidak kosong padahal data ada."""
+        if tanggal:
+            # Override lokal aktif dulu (Opsi C)
+            lokal = self.jadwal_override_lokal_jadwal_aktif("", tanggal)
+            if lokal:
+                return lokal
+        return self.conn.execute(
+            """SELECT * FROM jadwal_cache
+               ORDER BY sumber = 'override' DESC, kelas IS NOT NULL DESC
+               LIMIT 1"""
+        ).fetchone()
+
     # ---------- Absensi lokal (inti offline-first) ----------
 
     def status_hari_ini(self, siswa_id: int, tanggal: str) -> str:

@@ -104,15 +104,6 @@ def validate_timestamp(timestamp: str) -> str:
     return timestamp
 
 
-def validate_signature(signature: str) -> str:
-    """Validasi HMAC signature — hex string 64 karakter."""
-    if not signature or not isinstance(signature, str):
-        raise ValidationError("Signature tidak boleh kosong")
-    if len(signature) != 64 or not re.match(r"^[0-9a-f]{64}$", signature):
-        raise ValidationError("Signature tidak valid: harus hex string 64 karakter")
-    return signature
-
-
 def validate_record_size(data: bytes) -> bytes:
     """Validasi ukuran payload — cegah oversized request."""
     if len(data) > MAX_RECORD_LENGTH:

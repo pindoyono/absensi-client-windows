@@ -1,11 +1,9 @@
 """
 HTTP client untuk integrasi dengan server API.
-Implementasi REQ-SEC-001 (HMAC signing), REQ-SEC-002 (cert pinning),
-REQ-SEC-003 (rate limiting).
+Implementasi REQ-SEC-002 (cert pinning), REQ-SEC-003 (rate limiting).
 """
 import logging
 import time
-import hmac
 import hashlib
 import json
 import os
@@ -116,7 +114,6 @@ class ApiClient:
     
     Features:
     - Exponential backoff retry (REQ-QA-003)
-    - HMAC request signing (REQ-SEC-001)
     - HTTPS certificate pinning (REQ-SEC-002)
     - Comprehensive error handling
     - Request timeout
@@ -175,30 +172,12 @@ class ApiClient:
             f"ApiClient initialized: server={server_url}, device_id={device_id}"
         )
     
-    def _sign_request(self, method: str, path: str, body: bytes) -> tuple[str, str]:
-        """Compute HMAC-SHA256 signature for request (REQ-SEC-001).
-        
-        Returns:
-            (signature, timestamp)
-        """
-        timestamp = str(int(time.time()))
-        message = f"{method}|{path}|{timestamp}|{body.decode() if body else ''}"
-        signature = hmac.new(
-            self.device_api_key.encode(),
-            message.encode(),
-            hashlib.sha256
-        ).hexdigest()
-        return signature, timestamp
-    
     def _add_auth_headers(self, method: str = "GET", path: str = "", body: bytes = b"") -> dict:
-        """Add authentication + signature headers to request (REQ-SEC-001)."""
-        headers = {}
-        signature, timestamp = self._sign_request(method, path, body)
-        headers["X-Device-Id"] = self.device_id
-        headers["X-Device-Api-Key"] = self.device_api_key
-        headers["X-Signature"] = signature
-        headers["X-Timestamp"] = timestamp
-        return headers
+        """Add device authentication headers to request."""
+        return {
+            "X-Device-Id": self.device_id,
+            "X-Device-Api-Key": self.device_api_key,
+        }
     
     def rotate_api_key(self, new_api_key: str) -> None:
         """Rotate device API key (REQ-CRED-003).
@@ -391,40 +370,22 @@ class ApiClient:
                 self.audit_logger.log_rate_limit_blocked("/jadwal/efektif")
             raise KoneksiGagal("Rate limit exceeded")
         try:
-            # Endpoint /jadwal/efektif butuh JWT (HTTPBearer), bukan device key.
-            # Prioritas: GURU_SERVICE_JWT dari .env (token layanan read-only),
-            # fallback ke jwt_token admin dari config lokal.
-            token = os.environ.get("GURU_SERVICE_JWT", "")
-            if not token:
-                try:
-                    from app.device.setup import load_config_lokal
-                    token = load_config_lokal().get("jwt_token", "")
-                except Exception:
-                    pass
-            headers = self._add_auth_headers("GET", f"/jadwal/efektif?kelas={kelas}", b"")
-            if token:
-                headers["Authorization"] = f"Bearer {token}"
-
+            path = "/jadwal/efektif"
             response = self.session.get(
-                f"{self.server_url}/jadwal/efektif",
+                f"{self.server_url}{path}",
+                headers=self._add_auth_headers("GET", f"{path}?kelas={kelas}", b""),
                 params={"kelas": kelas},
-                headers=headers,
                 timeout=self.request_timeout,
             )
             response.raise_for_status()
-            
             result = response.json()
             logger.debug(f"Fetched jadwal for {kelas}: {result}")
             return result
-        
         except requests.exceptions.Timeout:
             logger.error(f"Fetch jadwal timeout after {self.request_timeout}s")
             raise
         except requests.exceptions.HTTPError as e:
-            if e.response.status_code in (401, 403):
-                logger.warning("Unauthorized to fetch jadwal (JWT invalid?), using cached")
-            else:
-                logger.error(f"Fetch jadwal failed: {e.response.status_code}")
+            logger.error(f"Fetch jadwal failed: {e.response.status_code}")
             raise
         except Exception as e:
             logger.error(f"Error fetching jadwal: {e}", exc_info=True)

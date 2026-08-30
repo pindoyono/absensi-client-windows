@@ -2,6 +2,22 @@
 
 Panduan testing di lapangan (gerbang sekolah) sebelum pilot 50+ siswa.
 
+> **⚠️ Gate Otomatis (REQ-TEST-001):**
+> Aplikasi terinstall dengan `ON_SITE_TESTING_SELESAI=false` di `.env`.
+> Selama masih `false`, aplikasi berjalan dalam **MODE TESTING**:
+>
+> - Banner "MODE TESTING" tampil di kiosk
+> - Hasil scan wajah **TIDAK disimpan** ke DB (hanya simulasi)
+>
+> Setelah testing selesai & lolos, ubah `.env`:
+>
+> ```
+> ON_SITE_TESTING_SELESAI=true
+> ```
+>
+> Lalu restart aplikasi. Ini memastikan device tidak dipakai reguler
+> sebelum liveness & embedding diverifikasi di lapangan.
+
 ---
 
 ## 1. Persiapan Sebelum Testing

@@ -8,7 +8,6 @@ from app.validation import (
     validate_device_id,
     validate_api_key,
     validate_timestamp,
-    validate_signature,
     validate_record_size,
     sanitize_string,
     ValidationError,
@@ -129,20 +128,6 @@ class TestValidateTimestamp:
     def test_invalid_timestamp_wrong_length(self):
         with pytest.raises(ValidationError):
             validate_timestamp("170000000")
-
-
-class TestValidateSignature:
-    def test_valid_signature(self):
-        sig = "a" * 64
-        assert validate_signature(sig) == sig
-
-    def test_invalid_signature_wrong_length(self):
-        with pytest.raises(ValidationError):
-            validate_signature("a" * 63)
-
-    def test_invalid_signature_not_hex(self):
-        with pytest.raises(ValidationError):
-            validate_signature("g" * 64)
 
 
 class TestValidateRecordSize:

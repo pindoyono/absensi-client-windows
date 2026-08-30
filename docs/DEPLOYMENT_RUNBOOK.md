@@ -34,7 +34,6 @@ DEVICE_ID=DEV-XXXX
 DEVICE_API_KEY=your_api_key_here
 FACE_ENCRYPTION_KEY=your_face_key_here
 DB_ENCRYPTION_KEY=your_db_key_here
-GURU_SERVICE_JWT=  # Biarkan kosong jika belum tersedia
 SYNC_INTERVAL_SECONDS=45
 TOLERANSI_TERLAMBAT_MENIT=5
 ```

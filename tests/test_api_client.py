@@ -97,3 +97,18 @@ def test_tarik_jadwal_dengan_device_api_key_terkirim_benar():
     assert req.headers["X-Device-Id"] == "dev1"
     assert req.headers["X-Device-Api-Key"] == "key1"
     assert "kelas=XI" in req.url
+
+@responses.activate
+def test_tarik_jadwal_tidak_mengirim_authorization_header():
+    """Bukti positif jalur JWT sudah hilang — /jadwal/efektif murni
+    pakai Device API Key, tidak boleh ada header Authorization."""
+    responses.add(
+        responses.GET, f"{BASE_URL}/jadwal/efektif",
+        json={"sumber": "standar", "jam_masuk": "07:00:00", "jam_pulang": "15:00:00"},
+        status=200,
+    )
+    api = ApiClient(BASE_URL, "dev1", "key1")
+    api.tarik_jadwal_efektif("XI Elektronika")
+
+    req = responses.calls[0].request
+    assert "Authorization" not in req.headers

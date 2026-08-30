@@ -63,8 +63,11 @@ class Settings:
     batas_stale_dispensasi_jam: int = int(os.environ.get("BATAS_STALE_DISPENSASI_JAM", "2"))
     batas_stale_embedding_hari: int = int(os.environ.get("BATAS_STALE_EMBEDDING_HARI", "3"))
 
-    # Peringatan dini sebelum GURU_SERVICE_JWT benar-benar expired (jam)
-    batas_peringatan_jwt_jam: int = int(os.environ.get("BATAS_PERINGATAN_JWT_JAM", "2"))
+    # --- On-site testing gate (REQ-TEST-001) ---
+    # Set 'true' setelah on-site testing selesai & lolos.
+    # Aplikasi tidak akan masuk mode reguler (scan wajah aktif)
+    # sampai flag ini diaktifkan.
+    on_site_testing_selesai: bool = os.environ.get("ON_SITE_TESTING_SELESAI", "false").lower() == "true"
 
     def validasi(self) -> list[str]:
         """Kembalikan daftar masalah konfigurasi — dipakai saat startup

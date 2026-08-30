@@ -71,6 +71,14 @@ def _setup_logging() -> logging.Logger:
 logger = _setup_logging()
 
 
+def resource_path(rel: str) -> str:
+    """Resolve path ke resource yang dibundel PyInstaller (--add-data).
+    Saat dijalankan sebagai .exe onefile, file dibongkar ke folder temp
+    (sys._MEIPASS); saat dev, pakai path relatif biasa."""
+    base = getattr(sys, "_MEIPASS", Path.cwd())
+    return str(Path(base) / rel)
+
+
 def main() -> int:
     """Main application entry point.
     
@@ -99,6 +107,26 @@ def main() -> int:
             + "\n\nHubungi admin untuk mendapatkan file .env yang benar.",
         )
         return 1
+
+    # Gate on-site testing (REQ-TEST-001): aplikasi tidak boleh dipakai
+    # reguler sebelum on-site testing selesai & dikonfirmasi admin.
+    if not settings.on_site_testing_selesai:
+        logger.warning("On-site testing belum selesai — mode testing aktif.")
+        jawab = QMessageBox.question(
+            None,
+            "Mode On-Site Testing",
+            "⚠️  ON-SITE TESTING BELUM SELESAI\n\n"
+            "Device ini masih dalam MODE TESTING.\n"
+            "Hasil absensi akan ditandai [TEST] dan TIDAK dihitung sebagai absensi resmi.\n\n"
+            "Ikuti panduan: docs/ON_SITE_TESTING.md\n\n"
+            "Setelah testing selesai & lolos, set di .env:\n"
+            "  ON_SITE_TESTING_SELESAI=true\n\n"
+            "Lanjutkan dalam mode testing?",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if jawab != QMessageBox.Yes:
+            logger.info("User memilih keluar dari mode testing.")
+            return 0
     
     conn = None
     sync_worker = None
@@ -125,7 +153,7 @@ def main() -> int:
         logger.info("Loading MiniFASNet engine...")
         from app.face.minifasnet_engine import MiniFASNetEngine
         engine = MiniFASNetEngine(
-            path_model_liveness="models/minifasnet.onnx",
+            path_model_liveness=resource_path("models/minifasnet.onnx"),
         )
         logger.warning(
             f"Using {engine.model_version} — liveness AKTIF tapi ambang batas "
@@ -174,6 +202,7 @@ def main() -> int:
             gunakan_kamera=True,
             audit_logger=audit_logger,
             sync_service=sync_service,
+            mode_testing=not settings.on_site_testing_selesai,
         )
         window.resize(1024, 768)
         

@@ -32,33 +32,12 @@ Ini key yang sama dipakai server untuk enkripsi embedding wajah (lihat
 aman** (bukan chat/email biasa) — kalau key ini bocor bersama akses ke
 device, embedding wajah bisa didekripsi orang tidak berwenang.
 
-### 2b. Generate GURU_SERVICE_JWT (untuk akses jadwal)
+### 2b. (Dihapus — endpoint jadwal kini menerima Device API Key)
 
-Endpoint jadwal di server butuh autentikasi guru (bukan API key device),
-jadi device butuh token "akun layanan" read-only — bukan token guru
-pribadi siapapun. Admin generate sekali (mirip cara generate token untuk
-testing Fase 1), lalu simpan tokennya untuk dipakai berulang di semua
-device kiosk:
-
-```bash
-sudo docker compose exec api python -c "
-from app.database import SessionLocal
-from app.models import Guru
-from app.auth import issue_internal_jwt
-db = SessionLocal()
-guru = db.query(Guru).filter(Guru.email == 'admin@sekolah.sch.id').first()
-print(issue_internal_jwt(guru))
-"
-```
-
-**Catatan:** token ini punya masa berlaku (default 12 jam di
-`JWT_EXPIRE_MINUTES`, lihat `.env` server) — untuk device kiosk yang
-harus jalan terus-menerus tanpa campur tangan manual, sebaiknya minta
-tim server menambahkan opsi masa berlaku lebih panjang khusus akun
-layanan, atau jadwalkan regenerasi token berkala. Ini didokumentasikan
-sebagai catatan open item, bukan solusi final — lihat juga catatan
-arsitektur di `app/api/client.py` soal alternatif jangka panjang
-(device API key untuk endpoint jadwal).
+Endpoint `/jadwal/efektif` di server sudah menerima `X-Device-Api-Key`
+langsung (sejak `get_guru_or_device` ditambahkan), sama seperti
+`/dispensasi/aktif`. Device **tidak lagi butuh** `GURU_SERVICE_JWT` —
+kredensial device sendiri sudah cukup untuk sync jadwal.
 
 ### 3. Install aplikasi
 

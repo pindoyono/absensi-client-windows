@@ -80,3 +80,22 @@ def test_tampilkan_hasil_spoofing(repo, qtbot):
     assert window.label_hasil.text() == "Akses ditolak"
     assert "foto/video" in window.label_status_detail.text().lower()
     assert window.kartu_status.isVisible() is True
+
+def test_mode_testing_menampilkan_banner(repo, qtbot):
+    engine = OpenCVPlaceholderEngine()
+    window = KioskWindow(
+        repo=repo, engine=engine, device_id="test-kiosk",
+        face_encryption_key="dummy",
+        jam_masuk_standar=dtime(7, 0), jam_pulang_standar=dtime(15, 0),
+        gunakan_kamera=False, mode_testing=True,
+    )
+    qtbot.addWidget(window)
+    window.show()
+
+    assert hasattr(window, "label_mode_testing")
+    assert window.label_mode_testing.isVisible()
+    assert "MODE TESTING" in window.label_mode_testing.text()
+
+def test_mode_reguler_tidak_menampilkan_banner(repo, qtbot):
+    window = _buat_window(repo, qtbot)
+    assert not hasattr(window, "label_mode_testing")

@@ -202,7 +202,6 @@ class AuditLogger:
         - AUTH_FAILURE: Failed authentication attempt
         - CERT_PINNING_FAILURE: SSL certificate pinning mismatch
         - RATE_LIMIT_BLOCKED: Request blocked by rate limiter
-        - HMAC_VERIFICATION_FAILURE: Server rejected HMAC signature
         - TOKEN_REFRESH: JWT token refresh event
         - TOKEN_EXPIRY: JWT token expired
         """
@@ -251,16 +250,6 @@ class AuditLogger:
             event_type="RATE_LIMIT_BLOCKED",
             action=f"Request blocked by rate limiter: {endpoint}",
             status="failed",
-            details={"endpoint": endpoint},
-        )
-    
-    def log_hmac_failure(self, endpoint: str, reason: str) -> None:
-        """Log HMAC signature verification failure."""
-        self.log_security_event(
-            event_type="HMAC_VERIFICATION_FAILURE",
-            action=f"HMAC signature rejected by server: {endpoint}",
-            status="failed",
-            error_message=reason,
             details={"endpoint": endpoint},
         )
     
