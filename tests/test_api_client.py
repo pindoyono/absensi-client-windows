@@ -98,6 +98,25 @@ def test_tarik_jadwal_dengan_device_api_key_terkirim_benar():
     assert req.headers["X-Device-Api-Key"] == "key1"
     assert "kelas=XI" in req.url
 
+
+@responses.activate
+def test_lapor_kesehatan_terkirim_dengan_auth_benar():
+    responses.add(
+        responses.POST, f"{BASE_URL}/device/dev1/health",
+        json={"status": "ok"},
+        status=200,
+    )
+    api = ApiClient(BASE_URL, "dev1", "key1")
+    api.lapor_kesehatan(1.5, 0.5)
+
+    req = responses.calls[0].request
+    assert req.headers["X-Device-Id"] == "dev1"
+    assert req.headers["X-Device-Api-Key"] == "key1"
+    import json
+    body = json.loads(req.body)
+    assert body["jadwal_jam_lalu"] == 1.5
+    assert body["dispensasi_jam_lalu"] == 0.5
+
 @responses.activate
 def test_tarik_jadwal_tidak_mengirim_authorization_header():
     """Bukti positif jalur JWT sudah hilang — /jadwal/efektif murni

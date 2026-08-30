@@ -161,4 +161,14 @@ class SyncService:
         except (KoneksiGagal, requests.exceptions.RequestException) as e:
             ringkasan.pesan_error = (ringkasan.pesan_error or "") + f" | Koneksi terputus saat tarik dispensasi: {e}"
 
+        # --- Lapor kesehatan device (PRD-tuntaskan-device-health) ---
+        try:
+            status = self.repo.status_kesegaran_data()
+            self.api.lapor_kesehatan(
+                jadwal_jam_lalu=status.get("jadwal_jam_lalu"),
+                dispensasi_jam_lalu=status.get("dispensasi_jam_lalu"),
+            )
+        except Exception as e:
+            logger.warning("Gagal lapor kesehatan device: %s", e)
+
         return ringkasan

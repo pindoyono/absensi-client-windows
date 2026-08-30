@@ -128,3 +128,39 @@ def test_siklus_sync_jadwal_fetch_failure_tidak_dianggap_error():
     # Sinkronisasi tetap selesai, tetapi kegagalan jadwal dilaporkan.
     assert "Koneksi terputus saat tarik jadwal" in hasil.pesan_error
     assert hasil.jadwal_diperbarui == 0
+
+
+def test_siklus_sync_lapor_kesehatan_di_akhir_siklus():
+    repo, api = MagicMock(), MagicMock()
+    api.cek_koneksi.return_value = True
+    repo.record_belum_sync.return_value = []
+    repo.get_metadata.return_value = None
+    repo.daftar_kelas.return_value = []
+    api.tarik_embedding.return_value = {"server_time": "t", "jumlah": 0, "data": []}
+    repo.status_kesegaran_data.return_value = {
+        "jadwal_jam_lalu": 1.5, "dispensasi_jam_lalu": 0.5,
+    }
+
+    hasil = SyncService(repo, api).siklus_sync()
+
+    # Setelah semua tarik/kirim selesai, kesehatan device dilaporkan
+    api.lapor_kesehatan.assert_called_once_with(
+        jadwal_jam_lalu=1.5, dispensasi_jam_lalu=0.5,
+    )
+    assert hasil.online is True
+
+
+def test_siklus_sync_lapor_kesehatan_gagal_tidak_menggagalkan_sync():
+    repo, api = MagicMock(), MagicMock()
+    api.cek_koneksi.return_value = True
+    repo.record_belum_sync.return_value = []
+    repo.get_metadata.return_value = None
+    repo.daftar_kelas.return_value = []
+    api.tarik_embedding.return_value = {"server_time": "t", "jumlah": 0, "data": []}
+    # Lapor kesehatan error 500 (exception) — TIDAK boleh gagalkan siklus
+    api.lapor_kesehatan.side_effect = Exception("500 Internal Server Error")
+
+    hasil = SyncService(repo, api).siklus_sync()
+
+    assert hasil.online is True
+    assert hasil.pesan_error is None  # siklus utama tetap bersih

@@ -308,6 +308,26 @@ class ApiClient:
             logger.error(f"Error during sync absensi: {e}", exc_info=True)
             raise
     
+    def lapor_kesehatan(self, jadwal_jam_lalu: float | None, dispensasi_jam_lalu: float | None) -> None:
+        """POST /device/{id}/health -- laporkan kesegaran data ke server
+        supaya admin bisa pantau semua device dari dashboard, tanpa perlu
+        datang fisik ke tiap kiosk."""
+        try:
+            path = f"/device/{self.device_id}/health"
+            payload = {"jadwal_jam_lalu": jadwal_jam_lalu, "dispensasi_jam_lalu": dispensasi_jam_lalu}
+            body = json.dumps(payload).encode()
+            response = self.session.post(
+                f"{self.server_url}{path}",
+                headers=self._add_auth_headers("POST", path, body),
+                json=payload,
+                timeout=self.request_timeout,
+            )
+            response.raise_for_status()
+        except Exception as e:
+            # Gagal lapor kesehatan TIDAK BOLEH menggagalkan siklus sync
+            # utama -- ini cuma pelaporan tambahan, bukan fungsi inti.
+            logger.warning(f"Gagal lapor kesehatan device: {e}")
+
     def tarik_embedding(self, diperbarui_sejak: Optional[str] = None) -> Dict[str, Any]:
         """Tarik embedding wajah siswa dari server untuk cache lokal.
         
