@@ -69,17 +69,21 @@ class Settings:
     # sampai flag ini diaktifkan.
     on_site_testing_selesai: bool = os.environ.get("ON_SITE_TESTING_SELESAI", "false").lower() == "true"
 
+    # Index kamera aktif (0 = webcam bawaan, 1+ = kamera USB tambahan, dst).
+    # Dipakai semua titik buka kamera (kiosk scan & preview enroll admin).
+    camera_index: int = int(os.environ.get("CAMERA_INDEX", "0"))
+
     def validasi(self) -> list[str]:
         """Kembalikan daftar masalah konfigurasi — dipakai saat startup
         supaya device dengan setup salah ketahuan cepat, bukan gagal
-        diam-diam di tengah hari sekolah."""
+        diam-diam di tengah hari sekolah.
+
+        Catatan: DEVICE_ID & DEVICE_API_KEY TIDAK diblokir di sini.
+        Device baru boleh startup tanpa keduanya — admin akan registrasi
+        lewat panel admin, lalu sistem isi otomatis."""
         masalah = []
         if not self.server_url:
             masalah.append("SERVER_URL belum diisi di .env")
-        if not self.device_id:
-            masalah.append("DEVICE_ID belum diisi di .env")
-        if not self.device_api_key:
-            masalah.append("DEVICE_API_KEY belum diisi di .env")
         if not self.face_encryption_key:
             masalah.append("FACE_ENCRYPTION_KEY belum diisi di .env — minta ke admin server")
         if not self.db_encryption_key:
@@ -87,13 +91,22 @@ class Settings:
         return masalah
 
     def __post_init__(self):
-        """Fallback ke Windows Credential Manager bila .env kosong (REQ-CRED-002)."""
+        """Fallback ke Windows Credential Manager bila .env kosong (REQ-CRED-002).
+        
+        Juga generate device_id otomatis dari hostname kalau kosong —
+        supaya registrasi (POST /device/register) punya ID unik walaupun
+        .env belum diisi."""
         if not self.dashboard_url and self.server_url:
             # Turunkan URL dashboard dari server_url: absen.xxx → front.xxx
             object.__setattr__(
                 self, "dashboard_url",
                 self.server_url.replace("absen.", "front.", 1),
             )
+        # Generate device_id otomatis dari hostname kalau kosong
+        if not self.device_id:
+            import socket
+            hostname = socket.gethostname().lower().replace(" ", "-")
+            object.__setattr__(self, "device_id", hostname)
         if not self.device_api_key and CredentialManager.is_available():
             cred = CredentialManager.get_credential("device_api_key")
             if cred:

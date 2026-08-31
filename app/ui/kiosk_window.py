@@ -68,10 +68,10 @@ class KioskWindow(QWidget):
 
         if gunakan_kamera:
             # Windows: pakai DSHOW backend untuk hindari error MSMF
-            self._cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+            self._cap = cv2.VideoCapture(settings.camera_index, cv2.CAP_DSHOW)
             if not self._cap.isOpened():
                 # Fallback ke default backend
-                self._cap = cv2.VideoCapture(0)
+                self._cap = cv2.VideoCapture(settings.camera_index)
             if not self._cap.isOpened():
                 self._cap = None
                 self.label_hasil.setText("❌ Kamera tidak tersedia")
@@ -620,9 +620,9 @@ class KioskWindow(QWidget):
         """Aktifkan kembali kamera setelah admin window ditutup."""
         if self._cap is not None:
             return  # Sudah aktif
-        self._cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+        self._cap = cv2.VideoCapture(settings.camera_index, cv2.CAP_DSHOW)
         if not self._cap.isOpened():
-            self._cap = cv2.VideoCapture(0)
+            self._cap = cv2.VideoCapture(settings.camera_index)
         if not self._cap.isOpened():
             self._cap = None
             self.label_hasil.setText("❌ Kamera tidak tersedia")

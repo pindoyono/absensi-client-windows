@@ -197,6 +197,9 @@ def simpan_config_lokal(api_key: str, device_id: str, jwt_token: str = "", role:
     with open(CONFIG_PATH, "w") as f:
         json.dump(config, f, indent=2)
 
+    # Update .env file
+    update_env_file(api_key, device_id)
+
     logger.info("Config tersimpan ke %s", CONFIG_PATH)
 
 
@@ -216,8 +219,8 @@ def load_config_lokal() -> dict:
     return {}
 
 
-def update_env_file(api_key: str) -> None:
-    """Update DEVICE_API_KEY di file .env.
+def update_env_file(api_key: str, device_id: str = "") -> None:
+    """Update DEVICE_API_KEY dan DEVICE_ID di file .env.
 
     .env bisa berisi komentar/emoji/karakter non-ASCII — buka dengan
     encoding utf-8 dan fallback ke cp1252/latin-1 supaya tidak crash
@@ -240,11 +243,13 @@ def update_env_file(api_key: str) -> None:
     for i, line in enumerate(lines):
         if line.strip().startswith("DEVICE_API_KEY="):
             lines[i] = f"DEVICE_API_KEY={api_key}\n"
+        if device_id and line.strip().startswith("DEVICE_ID="):
+            lines[i] = f"DEVICE_ID={device_id}\n"
 
     with open(env_path, "w", encoding="utf-8") as f:
         f.writelines(lines)
 
-    logger.info("API Key diperbarui di .env")
+    logger.info("API Key & Device ID diperbarui di .env")
 
 
 def proses_setup_device(

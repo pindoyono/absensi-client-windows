@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import cv2
 import numpy as np
 import onnxruntime as ort
@@ -153,7 +154,13 @@ class MiniFASNetEngine(FaceEngine):
                 self.session_embedding = self.session_liveness
 
         # Load face detector (Haar Cascade)
-        cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+        # Support PyInstaller bundle path
+        if getattr(sys, 'frozen', False):
+            base_path = sys._MEIPASS
+            cascade_path = os.path.join(base_path, 'cv2', 'data', 'haarcascade_frontalface_default.xml')
+        else:
+            cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+            
         self.face_cascade = cv2.CascadeClassifier(cascade_path)
         logger.info(f"Loaded Haar Cascade from: {cascade_path}")
 

@@ -13,12 +13,18 @@ engine_base.py.
 """
 from __future__ import annotations
 
+import os
+import sys
 import cv2
 import numpy as np
 
 from app.face.engine_base import FaceEngine, HasilDeteksi
 
-_CASCADE_PATH = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+# Support PyInstaller bundle path
+if getattr(sys, 'frozen', False):
+    _CASCADE_PATH = os.path.join(sys._MEIPASS, 'cv2', 'data', 'haarcascade_frontalface_default.xml')
+else:
+    _CASCADE_PATH = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
 
 
 class OpenCVPlaceholderEngine(FaceEngine):

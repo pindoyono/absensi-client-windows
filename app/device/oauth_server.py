@@ -305,6 +305,9 @@ class LoginResult:
         self.role: str = ""
         self.email: str = ""
         self.error: str = ""
+        # True saat device sudah terdaftar di server tapi API key tidak
+        # ditemukan di lokal — UI harus minta user menulis ulang API key.
+        self.needs_api_key: bool = False
 
 
 def proses_oauth_token(
@@ -361,7 +364,18 @@ def proses_oauth_token(
             config = load_config_lokal()
             api_key = config.get("api_key", "")
             if not api_key:
-                result.error = "Device sudah terdaftar tapi API key tidak ditemukan di lokal"
+                # API key hilang di lokal. Device sudah terdaftar di server,
+                # jadi tidak bisa register ulang. Minta user menulis ulang
+                # API key (dari admin/server) — bukan error fatal.
+                result.needs_api_key = True
+                result.jwt_token = jwt_token
+                result.nama = nama
+                result.role = role
+                result.error = (
+                    "Device sudah terdaftar di server, tapi API key tidak "
+                    "ditemukan di perangkat ini. Masukkan API key device "
+                    "untuk melanjutkan."
+                )
                 return result
             result.api_key = api_key
         elif resp_reg.status_code != 200:

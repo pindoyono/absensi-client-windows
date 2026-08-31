@@ -5,6 +5,7 @@ dan Pengaturan Lainnya.
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, date
 import cv2
 import numpy as np
@@ -13,12 +14,13 @@ import webbrowser
 
 logger = logging.getLogger(__name__)
 from PySide6.QtCore import Qt, QTimer, Signal, QThread
-from PySide6.QtGui import QImage, QPixmap, QColor
+from PySide6.QtGui import QImage, QPixmap, QColor, QAction, QIcon, QPainter, QPen
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
     QPushButton, QLineEdit, QStackedWidget, QTableWidget, QTableWidgetItem,
     QHeaderView, QMessageBox, QFormLayout, QGridLayout, QTextEdit,
     QListWidget, QListWidgetItem, QProgressBar, QInputDialog, QScrollArea,
+    QCheckBox, QComboBox,
 )
 
 from app.ui.styles import WARNA
@@ -29,6 +31,8 @@ from app.device.setup import (
     proses_login_google_manual, load_config_lokal, simpan_config_lokal,
     save_config_lokal, update_env_file, CONFIG_PATH,
 )
+from app.device.camera import daftar_kamera
+from app.config import settings
 
 STYLESHEET_ADMIN = f"""
 QMainWindow {{ background-color: {WARNA['bg']}; }}
@@ -188,6 +192,14 @@ class LoginScreen(QWidget):
                     QtConst.QueuedConnection,
                     Q_ARG(str, hasil.api_key), Q_ARG(str, hasil.nama),
                 )
+            elif hasil.needs_api_key:
+                # Device sudah terdaftar tapi API key hilang — minta user
+                # menulis ulang API key manual.
+                QMetaObject.invokeMethod(
+                    self, "_on_oauth_needs_api_key_thread",
+                    QtConst.QueuedConnection,
+                    Q_ARG(str, hasil.jwt_token), Q_ARG(str, hasil.nama),
+                )
             else:
                 QMetaObject.invokeMethod(
                     self, "_on_oauth_error_thread",
@@ -209,6 +221,45 @@ class LoginScreen(QWidget):
     @Slot(str)
     def _on_oauth_error_thread(self, msg: str):
         self._on_oauth_error(msg)
+
+    @Slot(str, str)
+    def _on_oauth_needs_api_key_thread(self, jwt_token: str, nama: str):
+        self._on_oauth_needs_api_key(jwt_token, nama)
+
+    def _on_oauth_needs_api_key(self, jwt_token: str, nama: str):
+        """Device sudah terdaftar tapi API key hilang — minta user menulis ulang."""
+        from PySide6.QtWidgets import QInputDialog, QLineEdit
+        from app.device.setup import simpan_config_lokal
+
+        api_key, ok = QInputDialog.getText(
+            self,
+            "API Key Diperlukan",
+            "Device sudah terdaftar di server, tapi API key tidak ditemukan "
+            "di perangkat ini.\n\nMasukkan API key device untuk melanjutkan:",
+            QLineEdit.Password,
+        )
+        if not ok or not api_key.strip():
+            self._error("API key tidak diisi. Registrasi dibatalkan.")
+            self.btn_google.setEnabled(True)
+            self.btn_google.setText("🌐 Login dengan Google Sekolah")
+            return
+
+        api_key = api_key.strip()
+        try:
+            simpan_config_lokal(
+                api_key=api_key,
+                device_id=self.device_id,
+                jwt_token=jwt_token,
+                nama=nama,
+            )
+            self._sukses(f"✅ API key tersimpan! Device '{nama}' siap digunakan.")
+            self.btn_google.setText("✅ Selesai")
+            QTimer.singleShot(1200, lambda: self.login_berhasil.emit(jwt_token))
+        except Exception as e:
+            logger.error("Gagal menyimpan API key: %s", e)
+            self._error(f"Gagal menyimpan API key: {e}")
+            self.btn_google.setEnabled(True)
+            self.btn_google.setText("🌐 Login dengan Google Sekolah")
 
     def _on_oauth_sukses(self, api_key: str, nama: str):
         """Callback saat OAuth + registrasi berhasil."""
@@ -456,6 +507,19 @@ class AdminWindow(QMainWindow):
             self.stack.addWidget(self.sync_screen)
             idx += 1
 
+            # 7. Pengaturan (.env) — admin only
+            self.btn_nav_settings = QPushButton("⚙️ Pengaturan (.env)")
+            self.btn_nav_settings.clicked.connect(lambda: self.stack.setCurrentIndex(6))
+            side_layout.addWidget(self.btn_nav_settings)
+            self.settings_screen = QWidget()
+            self._build_settings_ui(self.settings_screen)
+            settings_scroll = QScrollArea()
+            settings_scroll.setWidgetResizable(True)
+            settings_scroll.setWidget(self.settings_screen)
+            settings_scroll.setFrameShape(QFrame.NoFrame)
+            self.stack.addWidget(settings_scroll)
+            idx += 1
+
         side_layout.addStretch()
 
         btn_tutup = QPushButton("🚪 Logout & Tutup")
@@ -620,9 +684,9 @@ class AdminWindow(QMainWindow):
         if hasattr(self, "_cap_enroll") and self._cap_enroll is not None:
             return  # Sudah jalan
 
-        cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+        cap = cv2.VideoCapture(settings.camera_index, cv2.CAP_DSHOW)
         if not cap.isOpened():
-            cap = cv2.VideoCapture(0)
+            cap = cv2.VideoCapture(settings.camera_index)
         if not cap.isOpened():
             self.lbl_status.setText("❌ Kamera tidak dapat dibuka!")
             return
@@ -1451,6 +1515,303 @@ class AdminWindow(QMainWindow):
             item_ket = QTableWidgetItem(status if status else "—")
             for c, item in enumerate([item_jam, item_siswa, item_tipe, item_status, item_ket]):
                 self.table_sync.setItem(i, c, item)
+
+    # ---------- Pengaturan (.env) ----------
+
+    _ENV_SENSITIF = {
+        "DEVICE_API_KEY", "FACE_ENCRYPTION_KEY", "DB_ENCRYPTION_KEY",
+        "ADMIN_PASSWORD", "JWT_SECRET", "GURU_SERVICE_JWT",
+    }
+
+    # Kunci boolean — dirender sebagai toggle (checkbox) alih-alih input teks
+    _ENV_BOOL = {
+        "ON_SITE_TESTING_SELESAI",
+    }
+
+    _TOGGLE_ON = "background-color: #16a34a; border-radius: 9px; padding: 2px;"
+    _TOGGLE_OFF = "background-color: #4b5563; border-radius: 9px; padding: 2px;"
+
+    def _env_path(self) -> str:
+        """Path file .env yang dibaca aplikasi saat runtime."""
+        from app.config import APP_DIR
+        return str(APP_DIR / ".env")
+
+    @staticmethod
+    def _buat_ikon_mata(terbuka: bool) -> QIcon:
+        """Gambar ikon mata (terbuka/tutup) secara programatik — tidak
+        bergantung file resource, jadi aman untuk build PyInstaller."""
+        pm = QPixmap(20, 20)
+        pm.fill(Qt.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.Antialiasing)
+        pen = QPen(QColor("#9ca3af"))
+        pen.setWidth(2)
+        p.setPen(pen)
+        # Bentuk mata (elips)
+        p.drawEllipse(2, 6, 16, 8)
+        if terbuka:
+            # Pupil
+            p.setBrush(QColor("#9ca3af"))
+            p.drawEllipse(8, 8, 4, 4)
+        else:
+            # Garis coret (mata tertutup)
+            p.drawLine(3, 10, 17, 10)
+        p.end()
+        return QIcon(pm)
+
+    def _baca_env(self) -> list[dict]:
+        """Parse file .env menjadi daftar baris terstruktur.
+
+        Setiap entri: {key, value, komentar} — komentar adalah baris
+        komentar/blank yang mendahului baris KEY=VALUE, supaya saat
+        disimpan ulang komentar & urutan tetap dipertahankan.
+        """
+        path = self._env_path()
+        if not os.path.exists(path):
+            return []
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                raw = f.read()
+        except UnicodeDecodeError:
+            with open(path, "r", encoding="cp1252", errors="replace") as f:
+                raw = f.read()
+
+        entri = []
+        komentar = []
+        for line in raw.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                komentar.append(line)
+                continue
+            if "=" in line:
+                key, _, val = line.partition("=")
+                key = key.strip()
+                entri.append({"key": key, "value": val, "komentar": komentar})
+                komentar = []
+            else:
+                komentar.append(line)
+        return entri
+
+    def _build_settings_ui(self, parent: QWidget):
+        layout = QVBoxLayout(parent)
+        layout.setContentsMargins(32, 24, 32, 24)
+        layout.setSpacing(16)
+
+        judul = QLabel("⚙️ Pengaturan (.env)")
+        judul.setStyleSheet("font-size: 20px; font-weight: 600;")
+        layout.addWidget(judul)
+
+        sub = QLabel(
+            "Edit semua isian file .env. Perubahan disimpan langsung ke file "
+            "dan akan berlaku setelah aplikasi di-restart."
+        )
+        sub.setStyleSheet(f"font-size: 13px; color: {WARNA['teks_sekunder']};")
+        sub.setWordWrap(True)
+        layout.addWidget(sub)
+
+        self.settings_label_path = QLabel(f"📄 {self._env_path()}")
+        self.settings_label_path.setStyleSheet(f"font-size: 12px; color: {WARNA['teks_muted']};")
+        self.settings_label_path.setWordWrap(True)
+        layout.addWidget(self.settings_label_path)
+
+        # Form
+        form = QFormLayout()
+        form.setSpacing(10)
+        form.setLabelAlignment(Qt.AlignRight)
+        self.settings_widgets: dict[str, QLineEdit | QCheckBox | QComboBox] = {}
+        self.settings_entri = self._baca_env()
+        # Snapshot nilai awal file .env — dipakai tombol "Reset ke Awal"
+        self.settings_awal: dict[str, str] = {
+            e["key"]: e["value"] for e in self.settings_entri
+        }
+
+        if not self.settings_entri:
+            layout.addWidget(QLabel("⚠️ File .env tidak ditemukan atau kosong."))
+        else:
+            # --- Dropdown kamera (di atas form, supaya menonjol) ---
+            if any(e["key"] == "CAMERA_INDEX" for e in self.settings_entri):
+                cam_row = QHBoxLayout()
+                cam_row.setSpacing(10)
+                cam_label = QLabel("📷 Kamera Aktif:")
+                cam_label.setStyleSheet("font-size: 14px; font-weight: 600;")
+                cam_row.addWidget(cam_label)
+                self.combo_camera = QComboBox()
+                self.combo_camera.setMinimumWidth(320)
+                self._populate_combo_camera()
+                cam_row.addWidget(self.combo_camera)
+                cam_row.addStretch()
+                form.addRow(cam_row)
+
+            for entri in self.settings_entri:
+                key = entri["key"]
+                val = entri["value"].lower() if entri["value"] else ""
+
+                if key == "CAMERA_INDEX":
+                    # Sudah di-handle oleh dropdown di atas — lewati baris ini
+                    continue
+
+                if key in self._ENV_BOOL:
+                    # --- Toggle boolean (checkbox) ---
+                    cb = QCheckBox()
+                    cb.setObjectName(f"env_{key}")
+                    cb.setChecked(val == "true")
+                    cb.setStyleSheet(f"QCheckBox::indicator {{ width: 36px; height: 20px; }}")
+                    cb.stateChanged.connect(
+                        lambda state, w=cb: w.setStyleSheet(
+                            self._TOGGLE_ON if state else self._TOGGLE_OFF
+                        )
+                    )
+                    cb.setStyleSheet(
+                        self._TOGGLE_ON if val == "true" else self._TOGGLE_OFF
+                    )
+                    form.addRow(f"{key}:", cb)
+                    self.settings_widgets[key] = cb
+                else:
+                    # --- Input teks biasa ---
+                    inp = QLineEdit(entri["value"])
+                    inp.setObjectName(f"env_{key}")
+                    if key in self._ENV_SENSITIF:
+                        inp.setEchoMode(QLineEdit.Password)
+                        inp.setPlaceholderText("•••••••• (tersembunyi)")
+                        # Tombol mata: toggle tampil/sembunyi nilai
+                        act_toggle = QAction(inp)
+                        act_toggle.setCheckable(True)
+                        act_toggle.setIcon(self._buat_ikon_mata(False))
+                        act_toggle.setToolTip("Tampilkan / sembunyikan nilai")
+                        act_toggle.toggled.connect(
+                            lambda checked, e=inp, a=act_toggle: (
+                                e.setEchoMode(
+                                    QLineEdit.Normal if checked else QLineEdit.Password
+                                ),
+                                a.setIcon(self._buat_ikon_mata(checked)),
+                            )
+                        )
+                        inp.addAction(act_toggle, QLineEdit.TrailingPosition)
+                    form.addRow(f"{key}:", inp)
+                    self.settings_widgets[key] = inp
+
+        layout.addLayout(form)
+
+        # Tombol aksi
+        aksi = QHBoxLayout()
+        aksi.setSpacing(12)
+        btn_simpan = QPushButton("💾 Simpan Perubahan")
+        btn_simpan.setObjectName("btnPrimary")
+        btn_simpan.clicked.connect(self._simpan_settings)
+        aksi.addWidget(btn_simpan)
+        btn_muat = QPushButton("🔄 Muat Ulang")
+        btn_muat.clicked.connect(self._muat_ulang_settings)
+        aksi.addWidget(btn_muat)
+        btn_reset = QPushButton("♻️ Reset ke Awal")
+        btn_reset.setObjectName("btnDanger")
+        btn_reset.setToolTip("Kembalikan semua nilai ke isian awal file .env")
+        btn_reset.clicked.connect(self._reset_settings)
+        aksi.addWidget(btn_reset)
+        aksi.addStretch()
+        layout.addLayout(aksi)
+
+        self.settings_label_status = QLabel("")
+        self.settings_label_status.setStyleSheet(f"font-size: 13px; color: {WARNA['teks_sekunder']};")
+        self.settings_label_status.setWordWrap(True)
+        layout.addWidget(self.settings_label_status)
+
+        layout.addStretch()
+
+    def _populate_combo_camera(self):
+        """Isi combo box kamera dengan daftar kamera yang terdeteksi."""
+        daftar = daftar_kamera()
+        self.combo_camera.clear()
+        self.combo_camera.addItem("(Kamera tidak terdeteksi)", -1)
+        for cam in daftar:
+            self.combo_camera.addItem(
+                f"{cam['nama']}  (index {cam['index']})",
+                cam['index'],
+            )
+        # Pilih sesuai CAMERA_INDEX yang sedang aktif
+        idx_aktif = int(self.settings_awal.get("CAMERA_INDEX", "0"))
+        pos = self.combo_camera.findData(idx_aktif)
+        if pos >= 0:
+            self.combo_camera.setCurrentIndex(pos)
+
+    def _muat_ulang_settings(self):
+        """Muat ulang nilai dari file .env ke form."""
+        self.settings_entri = self._baca_env()
+        for entri in self.settings_entri:
+            w = self.settings_widgets.get(entri["key"])
+            if not w: continue
+            if isinstance(w, QCheckBox):
+                w.setChecked(entri["value"].lower() == "true")
+            else:
+                w.setText(entri["value"])
+        # Muat ulang combo kamera juga
+        if hasattr(self, "combo_camera"):
+            idx = int(self.settings_awal.get("CAMERA_INDEX", "0"))
+            pos = self.combo_camera.findData(idx)
+            if pos >= 0:
+                self.combo_camera.setCurrentIndex(pos)
+        self.settings_label_status.setText("🔄 Nilai dimuat ulang dari file .env.")
+        self.settings_label_status.setStyleSheet(f"color: {WARNA['teks_sekunder']};")
+
+    def _reset_settings(self):
+        """Kembalikan semua isian form ke nilai awal file .env."""
+        if not self.settings_awal:
+            self.settings_label_status.setText("⚠️ Tidak ada nilai awal untuk direset.")
+            self.settings_label_status.setStyleSheet(f"color: {WARNA['warning_teks']};")
+            return
+        for key, val in self.settings_awal.items():
+            w = self.settings_widgets.get(key)
+            if not w: continue
+            if isinstance(w, QCheckBox):
+                w.setChecked(val.lower() == "true")
+            else:
+                w.setText(val)
+        # Reset combo kamera
+        if hasattr(self, "combo_camera"):
+            idx = int(self.settings_awal.get("CAMERA_INDEX", "0"))
+            pos = self.combo_camera.findData(idx)
+            if pos >= 0:
+                self.combo_camera.setCurrentIndex(pos)
+        self.settings_label_status.setText(
+            "♻️ Semua isian dikembalikan ke nilai awal. Klik 'Simpan Perubahan' agar tertulis ke file."
+        )
+        self.settings_label_status.setStyleSheet(f"color: {WARNA['warning_teks']};")
+
+    def _simpan_settings(self):
+        """Tulis ulang file .env dengan nilai dari form, pertahankan
+        komentar & urutan baris."""
+        path = self._env_path()
+        try:
+            # Kumpulkan nilai baru dari form
+            nilai_baru = {}
+            for k, w in self.settings_widgets.items():
+                if isinstance(w, QCheckBox):
+                    nilai_baru[k] = "true" if w.isChecked() else "false"
+                else:
+                    nilai_baru[k] = w.text()
+            # Sisipkan nilai CAMERA_INDEX dari combo dropdown
+            if hasattr(self, "combo_camera"):
+                nilai_baru["CAMERA_INDEX"] = str(self.combo_camera.currentData())
+
+            # Bangun ulang isi file
+            baris = []
+            for entri in self.settings_entri:
+                baris.extend(entri["komentar"])
+                val = nilai_baru.get(entri["key"], entri["value"])
+                baris.append(f"{entri['key']}={val}")
+            isi = "\n".join(baris) + "\n"
+
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(isi)
+
+            self.settings_label_status.setText(
+                f"✅ Perubahan disimpan ke {path}. Restart aplikasi agar berlaku."
+            )
+            self.settings_label_status.setStyleSheet(f"color: {WARNA['sukses_teks']};")
+            logger.info("Pengaturan .env disimpan ke %s", path)
+        except Exception as e:
+            logger.error("Gagal simpan .env: %s", e)
+            self.settings_label_status.setText(f"❌ Gagal menyimpan: {e}")
+            self.settings_label_status.setStyleSheet(f"color: {WARNA['bahaya_teks']};")
 
     def closeEvent(self, event):
         self.logout_admin.emit()
