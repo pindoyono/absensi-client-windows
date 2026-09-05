@@ -3,6 +3,7 @@ Konfigurasi client Windows. Nilai diambil dari file .env di folder yang
 sama dengan executable — supaya bisa diganti per device tanpa build ulang.
 """
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -11,8 +12,18 @@ from dotenv import load_dotenv
 from app.device.credentials import CredentialManager
 
 # .env dicari di folder tempat aplikasi dijalankan (bukan hardcode path
-# development), supaya installer bisa taruh .env di sebelah .exe
-APP_DIR = Path(os.environ.get("ABSENSI_APP_DIR", Path.cwd()))
+# development), supaya installer bisa taruh .env di sebelah .exe.
+# Saat frozen (PyInstaller), pakai folder executable agar shortcut/startup
+# tetap bisa menemukan .env meskipun working directory berbeda.
+def _resolve_app_dir() -> Path:
+    env_override = os.environ.get("ABSENSI_APP_DIR")
+    if env_override:
+        return Path(env_override)
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent
+    return Path.cwd()
+
+APP_DIR = _resolve_app_dir()
 load_dotenv(APP_DIR / ".env")
 
 
@@ -119,6 +130,44 @@ class Settings:
             cred = CredentialManager.get_credential("db_encryption_key")
             if cred:
                 object.__setattr__(self, "db_encryption_key", cred)
+
+        # Auto-generate DB_ENCRYPTION_KEY kalau masih placeholder/kosong/invalid
+        placeholder = "ganti_dengan_key_acak_khusus_device_ini"
+        is_placeholder = (
+            not self.db_encryption_key
+            or self.db_encryption_key == placeholder
+            or self.db_encryption_key == "dev_local_db_secret_key_12345"
+            or len(self.db_encryption_key) < 32
+        )
+        if is_placeholder:
+            import secrets
+            new_key = secrets.token_hex(32)
+            object.__setattr__(self, "db_encryption_key", new_key)
+            # Tulis ke .env supaya persist
+            try:
+                import logging
+                log = logging.getLogger(__name__)
+                env_path = os.path.join(APP_DIR, ".env")
+                if os.path.exists(env_path):
+                    def _baca():
+                        try:
+                            with open(env_path, "r", encoding="utf-8") as f:
+                                return f.readlines()
+                        except UnicodeDecodeError:
+                            with open(env_path, "r", encoding="cp1252", errors="replace") as f:
+                                return f.readlines()
+                    lines = _baca()
+                    for i, line in enumerate(lines):
+                        if line.strip().startswith("DB_ENCRYPTION_KEY="):
+                            lines[i] = f"DB_ENCRYPTION_KEY={new_key}\n"
+                            break
+                    else:
+                        lines.append(f"DB_ENCRYPTION_KEY={new_key}\n")
+                    with open(env_path, "w", encoding="utf-8") as f:
+                        f.writelines(lines)
+                    log.info("DB_ENCRYPTION_KEY otomatis digenerate & disimpan ke .env")
+            except Exception as e:
+                print(f"Gagal simpan DB_ENCRYPTION_KEY ke .env: {e}")
 
 
 settings = Settings()

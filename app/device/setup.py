@@ -13,10 +13,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 import socket
 import threading
 from dataclasses import dataclass
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse, parse_qs, urlencode
 
@@ -24,9 +26,20 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-# APP_DIR bisa di-override lewat env (lihat app/config.py) — supaya path
-# konsisten antara dev, PyInstaller .exe, dan instalasi via setup script.
-_APP_DIR = os.environ.get("ABSENSI_APP_DIR", os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+# APP_DIR harus merujuk ke folder .exe (bukan folder temp PyInstaller).
+# Saat frozen (PyInstaller onefile), __file__ ada di _MEIPASS (temp dir)
+# yang dihapus setelah app berhenti — sehingga device_config.json tidak
+# bisa ditemukan. Solusi: pakai folder executable saat frozen.
+def _resolve_app_dir() -> str:
+    env_override = os.environ.get("ABSENSI_APP_DIR")
+    if env_override:
+        return env_override
+    if getattr(sys, "frozen", False):
+        # PyInstaller onefile: sys.executable = path ke .exe
+        return str(Path(sys.executable).parent)
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+_APP_DIR = _resolve_app_dir()
 CONFIG_PATH = os.path.join(_APP_DIR, "data", "device_config.json")
 
 

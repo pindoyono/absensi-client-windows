@@ -21,6 +21,7 @@ import base64
 import hashlib
 import json
 import os
+import sys
 import threading
 import time
 import urllib.parse
@@ -43,9 +44,20 @@ REDIRECT_PATH = "/"
 REDIRECT_URI = f"http://{REDIRECT_HOST}:{REDIRECT_PORT}"
 
 # File config
-DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
+# Saat frozen (PyInstaller onefile), __file__ ada di _MEIPASS (temp dir)
+# yang dihapus setelah app berhenti — sehingga device_config.json tidak
+# bisa ditemukan. Solusi: pakai folder executable saat frozen.
+def _resolve_data_dir() -> Path:
+    env_override = os.environ.get("ABSENSI_APP_DIR")
+    if env_override:
+        return Path(env_override) / "data"
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent / "data"
+    return Path(__file__).resolve().parent.parent.parent / "data"
+
+DATA_DIR = _resolve_data_dir()
 CONFIG_FILE = DATA_DIR / "device_config.json"
-ENV_FILE = DATA_DIR / ".env"
+ENV_FILE = DATA_DIR.parent / ".env"
 
 
 # ═══════════════════════════════════════════════════════════════
