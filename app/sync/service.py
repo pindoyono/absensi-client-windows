@@ -162,13 +162,33 @@ class SyncService:
             ringkasan.pesan_error = (ringkasan.pesan_error or "") + f" | Koneksi terputus saat tarik dispensasi: {e}"
 
         # --- Lapor kesehatan device (PRD-tuntaskan-device-health) ---
+        # Response membawa nama_lokasi TERKINI dari server (admin bisa ubah
+        # via PATCH /device/{id}) — segarkan config lokal supaya kiosk ikut.
         try:
             status = self.repo.status_kesegaran_data()
-            self.api.lapor_kesehatan(
+            resp = self.api.lapor_kesehatan(
                 jadwal_jam_lalu=status.get("jadwal_jam_lalu"),
                 dispensasi_jam_lalu=status.get("dispensasi_jam_lalu"),
             )
+            if isinstance(resp, dict):
+                self._segarkan_nama_lokasi(resp.get("nama_lokasi"))
         except Exception as e:
             logger.warning("Gagal lapor kesehatan device: %s", e)
 
         return ringkasan
+
+    @staticmethod
+    def _segarkan_nama_lokasi(nama_server) -> None:
+        """Tulis nama_lokasi terbaru ke device_config.json bila berubah."""
+        nama = (nama_server or "").strip()
+        if not nama:
+            return
+        try:
+            from app.device.setup import load_config_lokal, save_config_lokal
+            cfg = load_config_lokal()
+            if cfg.get("nama_lokasi") != nama:
+                cfg["nama_lokasi"] = nama
+                save_config_lokal(cfg)
+                logger.info("nama_lokasi disegarkan dari server: %s", nama)
+        except Exception as e:
+            logger.warning("Gagal menyegarkan nama_lokasi: %s", e)

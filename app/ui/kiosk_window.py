@@ -111,6 +111,11 @@ class KioskWindow(QWidget):
         self.label_status_jaringan = QLabel("● Online · tersinkron")
         self.label_status_jaringan.setStyleSheet(f"color: {WARNA['sukses_teks']}; font-size: 13px;")
 
+        # Nama lokasi kiosk — disegarkan dari server tiap siklus sync (POST /health).
+        self.label_lokasi = QLabel("")
+        self.label_lokasi.setStyleSheet(f"color: {WARNA['teks_sekunder']}; font-size: 13px;")
+        self._muat_nama_lokasi()
+
         self.label_status_sync = QLabel("")
         self.label_status_sync.setStyleSheet(f"color: {WARNA['teks_sekunder']}; font-size: 12px;")
 
@@ -148,6 +153,7 @@ class KioskWindow(QWidget):
         )
 
         header.addWidget(self.label_status_jaringan)
+        header.addWidget(self.label_lokasi)
         header.addWidget(self.label_status_sync)
         header.addWidget(self.label_jadwal_lokal)
         header.addWidget(self.label_kesegaran)
@@ -328,6 +334,17 @@ class KioskWindow(QWidget):
         # terisi/berubah setelah tarik jadwal dari server.
         self._update_jadwal_waktu()
         self._update_badge_kesegaran(ringkasan)
+        self._muat_nama_lokasi()  # nama_lokasi bisa diubah admin di dashboard
+
+    def _muat_nama_lokasi(self) -> None:
+        """Baca nama_lokasi dari device_config.json (disegarkan SyncService)."""
+        try:
+            from app.device.setup import load_config_lokal
+            nama = (load_config_lokal().get("nama_lokasi") or "").strip()
+            self.label_lokasi.setText(f"📍 {nama}" if nama else "")
+            self.label_lokasi.setVisible(bool(nama))
+        except Exception:
+            pass
 
     def _update_badge_kesegaran(self, ringkasan=None) -> None:
         """Tampilkan badge status data cache lokal. Selalu tampil:

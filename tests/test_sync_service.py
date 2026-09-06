@@ -164,3 +164,23 @@ def test_siklus_sync_lapor_kesehatan_gagal_tidak_menggagalkan_sync():
 
     assert hasil.online is True
     assert hasil.pesan_error is None  # siklus utama tetap bersih
+
+
+def test_segarkan_nama_lokasi_menulis_config_saat_berubah(monkeypatch):
+    tersimpan = {}
+    monkeypatch.setattr("app.device.setup.load_config_lokal", lambda: {"nama_lokasi": "Gerbang Lama"})
+    monkeypatch.setattr("app.device.setup.save_config_lokal", lambda c: tersimpan.update(c))
+
+    SyncService._segarkan_nama_lokasi("  Gerbang Belakang  ")
+    assert tersimpan.get("nama_lokasi") == "Gerbang Belakang"
+
+
+def test_segarkan_nama_lokasi_tidak_menulis_kalau_sama_atau_kosong(monkeypatch):
+    calls = []
+    monkeypatch.setattr("app.device.setup.load_config_lokal", lambda: {"nama_lokasi": "Gerbang"})
+    monkeypatch.setattr("app.device.setup.save_config_lokal", lambda c: calls.append(c))
+
+    SyncService._segarkan_nama_lokasi("Gerbang")   # sama
+    SyncService._segarkan_nama_lokasi("   ")       # kosong
+    SyncService._segarkan_nama_lokasi(None)
+    assert calls == []
