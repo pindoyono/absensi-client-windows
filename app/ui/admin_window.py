@@ -890,8 +890,10 @@ class AdminWindow(QMainWindow):
         layout.addWidget(lbl_override)
 
         self.table_jadwal_override = QTableWidget()
-        self.table_jadwal_override.setColumnCount(5)
-        self.table_jadwal_override.setHorizontalHeaderLabels(["Tanggal", "Kelas", "Jam Masuk", "Jam Pulang", "Alasan"])
+        self.table_jadwal_override.setColumnCount(6)
+        self.table_jadwal_override.setHorizontalHeaderLabels(
+            ["Tanggal", "Kelas", "Jam Masuk", "Jam Pulang", "Alasan", "Aksi"]
+        )
         self.table_jadwal_override.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table_jadwal_override.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table_jadwal_override.setSelectionBehavior(QTableWidget.SelectRows)
@@ -1074,6 +1076,7 @@ class AdminWindow(QMainWindow):
         if not isinstance(data, list):
             return []
         return [{
+            "id": item.get("id"),  # dipakai tombol hapus (DELETE /jadwal/override/{id})
             "tanggal": str(item.get("tanggal") or "-"),
             "kelas": str(item.get("kelas") or "Semua kelas"),
             "jam_masuk": str(item.get("jam_masuk") or "-"),
@@ -1093,13 +1096,43 @@ class AdminWindow(QMainWindow):
             self.table_jadwal_standar.setItem(i, 3, QTableWidgetItem(self._durasi_jadwal(jam_masuk, jam_pulang)))
             self.table_jadwal_standar.setItem(i, 4, QTableWidgetItem("Edit di Dashboard Web"))
 
+        hari_ini = date.today().isoformat()
         self.table_jadwal_override.setRowCount(len(override))
         for i, j in enumerate(override):
-            self.table_jadwal_override.setItem(i, 0, QTableWidgetItem(str(j.get("tanggal", ""))))
-            self.table_jadwal_override.setItem(i, 1, QTableWidgetItem(str(j.get("kelas", "Semua"))))
-            self.table_jadwal_override.setItem(i, 2, QTableWidgetItem(str(j.get("jam_masuk", "") or "—")))
-            self.table_jadwal_override.setItem(i, 3, QTableWidgetItem(str(j.get("jam_pulang", "") or "—")))
-            self.table_jadwal_override.setItem(i, 4, QTableWidgetItem(str(j.get("alasan", "") or "—")))
+            tgl = str(j.get("tanggal", "") or "")
+            items = [
+                QTableWidgetItem(tgl),
+                QTableWidgetItem(str(j.get("kelas", "") or "Semua")),
+                QTableWidgetItem(str(j.get("jam_masuk", "") or "—")),
+                QTableWidgetItem(str(j.get("jam_pulang", "") or "—")),
+                QTableWidgetItem(str(j.get("alasan", "") or "—")),
+            ]
+            # Identifikasi cepat: yang tanggalnya sudah lewat = kandidat hapus.
+            if tgl and tgl < hari_ini:
+                items[0].setText(f"{tgl}  · lewat")
+                for it in items:
+                    it.setForeground(QColor(WARNA["teks_sekunder"]))
+            elif tgl == hari_ini:
+                items[0].setText(f"{tgl}  · hari ini")
+                for it in items:
+                    it.setForeground(QColor(WARNA["warning_teks"]))
+            for c, it in enumerate(items):
+                self.table_jadwal_override.setItem(i, c, it)
+
+            oid = j.get("id")
+            if oid is None:
+                self.table_jadwal_override.setItem(i, 5, QTableWidgetItem("—"))
+                continue
+            w = QWidget()
+            lay = QHBoxLayout(w)
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.setSpacing(4)
+            btn_hapus = QPushButton("🗑️")
+            btn_hapus.setToolTip("Hapus override server ini (berlaku untuk semua device)")
+            btn_hapus.clicked.connect(lambda _=False, x=oid: self._hapus_override_server(x))
+            lay.addWidget(btn_hapus)
+            lay.addStretch()
+            self.table_jadwal_override.setCellWidget(i, 5, w)
 
         # Muat override lokal dari DB
         self._isi_tabel_override_lokal()
@@ -1189,6 +1222,59 @@ class AdminWindow(QMainWindow):
         self.label_jadwal_status.setText("🗑️ Override lokal dihapus.")
         self.label_jadwal_status.setStyleSheet(f"font-size: 12px; color: {WARNA['sukses_teks']};")
         self._isi_tabel_override_lokal()
+
+    def _hapus_override_server(self, override_id):
+        """Hapus override jadwal di SERVER (DELETE /jadwal/override/{id}).
+        Berlaku untuk semua device — butuh JWT admin / guru piket."""
+        if QMessageBox.question(
+            self, "Konfirmasi",
+            f"Hapus override server ini (id {override_id})?\n"
+            "Perubahan berlaku untuk SEMUA device setelah sync berikutnya.",
+            QMessageBox.Yes | QMessageBox.No,
+        ) != QMessageBox.Yes:
+            return
+
+        jwt_token = getattr(self, "jwt_token", "") or load_config_lokal().get("jwt_token", "")
+        if not jwt_token:
+            QMessageBox.warning(
+                self, "Perlu Login",
+                "JWT token tidak ada. Login ulang sebagai admin / guru piket dulu.",
+            )
+            return
+
+        self.btn_refresh_jadwal.setEnabled(False)
+        try:
+            resp = requests.delete(
+                f"{self.server_url}/jadwal/override/{override_id}",
+                headers={"Authorization": f"Bearer {jwt_token}"},
+                timeout=15,
+            )
+            if resp.status_code in (401, 403):
+                QMessageBox.warning(
+                    self, "Ditolak",
+                    "Hanya admin / guru piket yang boleh menghapus override server.",
+                )
+                return
+            if resp.status_code == 404:
+                self.label_jadwal_status.setText("ℹ️ Override sudah tidak ada di server.")
+                self.label_jadwal_status.setStyleSheet(
+                    f"font-size: 12px; color: {WARNA['warning_teks']};"
+                )
+            else:
+                resp.raise_for_status()
+                self.label_jadwal_status.setText(f"🗑️ Override server (id {override_id}) dihapus.")
+                self.label_jadwal_status.setStyleSheet(
+                    f"font-size: 12px; color: {WARNA['sukses_teks']};"
+                )
+        except Exception as e:
+            logger.warning("Hapus override server gagal: %s", e)
+            self.label_jadwal_status.setText(f"⚠️ Gagal hapus override server: {e}")
+            self.label_jadwal_status.setStyleSheet(
+                f"font-size: 12px; color: {WARNA['bahaya_teks']};"
+            )
+            self.btn_refresh_jadwal.setEnabled(True)
+            return
+        self._load_jadwal_data()  # re-enable tombol + muat ulang tabel
 
     def _reset_status_push(self):
         """Reset override yang ditolak server menjadi 'pending' supaya
